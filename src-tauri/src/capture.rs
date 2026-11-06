@@ -4,11 +4,13 @@
 //! - All platforms: local loopback relay listener on `127.0.0.1:50560` + built-in wire simulator.
 
 use albion_core::engine::AnalyzerEngine;
-use albion_core::photon::{
-    extract_udp_from_ip_packet, is_photon_port, looks_like_photon, UdpDatagramSlice,
-};
+#[cfg(any(target_os = "macos", test))]
+use albion_core::photon::UdpDatagramSlice;
+use albion_core::photon::{extract_udp_from_ip_packet, is_photon_port, looks_like_photon};
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+#[cfg(any(target_os = "windows", test))]
+use std::net::{IpAddr, Ipv4Addr};
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
