@@ -45,3 +45,16 @@ jobs:
           tagName: v__VERSION__
           releaseName: Albion Stats v__VERSION__
           releaseDraft: true
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(gh release list -R "${{ github.repository }}" --limit 5 --json tagName,isDraft --jq '.[] | select(.isDraft == true) | .tagName' | head -n 1)
+          if [ -n "$TAG" ]; then
+            gh release edit "$TAG" -R "${{ github.repository }}" --draft=false --latest
+          fi

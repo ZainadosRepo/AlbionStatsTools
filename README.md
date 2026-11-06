@@ -1,8 +1,35 @@
 # Albion Stats
 
+[![Release](https://img.shields.io/github/v/release/ZainadosRepo/AlbionStatsTools)](https://github.com/ZainadosRepo/AlbionStatsTools/releases/latest)
+[![CI](https://github.com/ZainadosRepo/AlbionStatsTools/actions/workflows/ci.yml/badge.svg)](https://github.com/ZainadosRepo/AlbionStatsTools/actions/workflows/ci.yml)
+
 Application de bureau native en **Rust + Tauri 2** dédiée au suivi en temps réel des statistiques de combat, de session, de récolte, de donjons et d'économie pour **Albion Online**.
 
 L'application observe passivement les paquets réseau **Photon UDP** non chiffrés sur le port `5056` (sans aucun pilote tiers requis grâce aux sockets bruts Windows `SIO_RCVALL`), décode le flux binaire **Protocol16** à la volée, et met à disposition un compteur de dégâts/soins ultra-léger ainsi qu'un calculateur économique relié à l'API publique **Albion Data Project**.
+
+## Télécharger
+
+Dernière version : **[Releases › Latest](https://github.com/ZainadosRepo/AlbionStatsTools/releases/latest)**
+
+| Système | Fichier |
+| --- | --- |
+| Windows 10 / 11 (64 bits) | `Albion.Stats_<version>_x64-setup.exe` |
+| macOS (Intel et Apple Silicon) | `Albion.Stats_<version>_universal.dmg` |
+
+### Windows
+
+1. Lancer `Albion.Stats_<version>_x64-setup.exe`.
+2. L'installeur n'est pas signé : si Windows SmartScreen s'affiche, cliquer sur **Informations complémentaires**, puis **Exécuter quand même**.
+3. Suivre l'installeur ; Albion Stats apparaît dans le menu Démarrer.
+
+### macOS
+
+1. Ouvrir le `.dmg` et glisser **Albion Stats** dans **Applications**.
+2. L'appli n'est pas signée : au premier lancement, macOS la bloque. Ouvrir **Réglages Système › Confidentialité et sécurité**, puis cliquer sur **Ouvrir quand même** en bas de la page.
+
+### Mettre à jour
+
+Au lancement, l'appli regarde sur GitHub si une version plus récente est publiée et propose de l'installer : **Installer** la télécharge, vérifie sa signature et redémarre l'appli ; **Plus tard** la reproposera au prochain lancement. Hors ligne, rien ne s'affiche. Les profils, snapshots et réglages sont conservés.
 
 ---
 

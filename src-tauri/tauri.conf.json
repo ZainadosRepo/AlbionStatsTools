@@ -41,7 +41,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQzRDhBMUVDODA5NzZGNDYKUldSR2I1ZUE3S0hZMDdzSElwenpmSVc4bmFTOEQvVGlOaXpSR3RZWlN1Ynh2Tmk1VjNEZFE5anUK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVCNUQyRDlEMzlBMDNDRDgKUldUWVBLQTVuUzFkNjBhaTRCZCtYY2hvR0NDR3c3TEVaY0t2R2cwM1B4TXFWcHo1WS9tTDNWTXUK",
       "endpoints": [
         "https://github.com/ZainadosRepo/AlbionStatsTools/releases/latest/download/latest.json"
       ]
