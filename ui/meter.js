@@ -216,3 +216,12 @@ export const summarizeMarketPrices = (rows = []) => {
   }
   return out;
 };
+
+export const buildAlbionItemIconUrl = (uniqueName, size = 40) => {
+  const clean = String(uniqueName ?? "").trim();
+  if (!clean || clean === "UNARMED" || clean === "SILVER" || clean.startsWith("ITEM_")) {
+    return null;
+  }
+  const px = Math.max(16, Math.min(217, Math.round(Number(size) || 40)));
+  return `https://render.albiononline.com/v1/item/${encodeURIComponent(clean)}.png?size=${px}`;
+};

@@ -1391,6 +1391,33 @@ impl AnalyzerEngine {
         self.snapshots.len() != before
     }
 
+    /// Exports persisted history (snapshots, dungeons, gathering, loot) for disk storage.
+    pub fn export_history(&self) -> PersistedHistory {
+        PersistedHistory {
+            snapshots: self.snapshots.clone(),
+            dungeons: self.dungeons.clone(),
+            gathering_totals: self.gathering_totals.clone(),
+            gathering_log: self.gathering_log.clone(),
+            loot_log: self.loot_log.clone(),
+        }
+    }
+
+    /// Restores persisted history loaded from disk at startup.
+    pub fn restore_history(&mut self, mut history: PersistedHistory) {
+        history.snapshots.truncate(MAX_SNAPSHOTS);
+        history.dungeons.truncate(MAX_DUNGEON_RUNS);
+        history.gathering_log.truncate(MAX_GATHERING_LOG);
+        history.loot_log.truncate(MAX_LOOT_LOG);
+        for d in &mut history.dungeons {
+            d.is_active = false;
+        }
+        self.snapshots = history.snapshots;
+        self.dungeons = history.dungeons;
+        self.gathering_totals = history.gathering_totals;
+        self.gathering_log = history.gathering_log;
+        self.loot_log = history.loot_log;
+    }
+
     /// Exports the loot log as a RFC-4180 CSV string.
     pub fn export_loot_csv(&self) -> String {
         let mut out = String::from(
@@ -2216,5 +2243,28 @@ mod tests {
         assert_eq!(snap.loot_log.len(), 2);
         let csv = engine.export_loot_csv();
         assert!(csv.contains("T8_2H_DUALSWORD@2"));
+    }
+
+    #[test]
+    fn exports_and_restores_persisted_session_history() {
+        let catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let mut engine = AnalyzerEngine::new(catalog.clone(), 1_000);
+        engine.run_wire_simulation_scenario(1_000);
+        let saved_snap = engine.take_snapshot(Some("Boss Brumes".into()), 20_000);
+        assert!(saved_snap.is_some());
+
+        let exported = engine.export_history();
+        assert_eq!(exported.snapshots.len(), 1);
+        assert_eq!(exported.dungeons.len(), 1);
+        assert_eq!(exported.loot_log.len(), 1);
+
+        let mut fresh = AnalyzerEngine::new(catalog, 50_000);
+        fresh.restore_history(exported);
+        let restored = fresh.snapshot(50_000);
+        assert_eq!(restored.snapshots.len(), 1);
+        assert_eq!(restored.snapshots[0].label, "Boss Brumes");
+        assert_eq!(restored.dungeons.len(), 1);
+        assert!(!restored.dungeons[0].is_active);
+        assert_eq!(restored.loot_log.len(), 1);
     }
 }

@@ -70,6 +70,15 @@ struct AoBinDumpItem {
     localized_names: Option<HashMap<String, String>>,
 }
 
+/// Shape of entries inside `ao-bin-dumps/formatted/world.json`.
+#[derive(Debug, Deserialize)]
+struct AoBinDumpWorld {
+    #[serde(rename = "Index")]
+    index: String,
+    #[serde(rename = "UniqueName")]
+    unique_name: String,
+}
+
 impl Catalog {
     pub fn from_json_str(json: &str) -> Result<Self, String> {
         let raw: RawCatalog = serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -156,6 +165,22 @@ impl Catalog {
         self.clusters_by_index.len()
     }
 
+    /// Exports the full catalog (including merged `ao-bin-dumps` items and clusters) for disk caching.
+    pub fn export_raw(&self) -> RawCatalog {
+        let mut items: Vec<ItemEntry> = self.items_by_index.values().cloned().collect();
+        items.sort_by_key(|i| i.index);
+        let mut spells: Vec<SpellEntry> = self.spells_by_index.values().cloned().collect();
+        spells.sort_by_key(|s| s.index);
+        let mut clusters: Vec<ClusterEntry> = self.clusters_by_index.values().cloned().collect();
+        clusters.sort_by(|a, b| a.index.cmp(&b.index));
+        RawCatalog {
+            version: self.version.clone(),
+            items,
+            spells,
+            clusters,
+        }
+    }
+
     /// Merges items from the public `ao-bin-dumps` `formatted/items.json` file.
     pub fn merge_ao_bin_dumps_items(&mut self, json_text: &str) -> Result<usize, String> {
         let entries: Vec<AoBinDumpItem> =
@@ -192,6 +217,41 @@ impl Catalog {
             };
             self.items_by_unique.insert(item.unique_name.clone(), index);
             self.items_by_index.insert(index, item);
+            added += 1;
+        }
+        Ok(added)
+    }
+
+    /// Merges world clusters from the public `ao-bin-dumps` `formatted/world.json` file.
+    pub fn merge_ao_bin_dumps_world(&mut self, json_text: &str) -> Result<usize, String> {
+        let entries: Vec<AoBinDumpWorld> =
+            serde_json::from_str(json_text).map_err(|e| e.to_string())?;
+        let mut added = 0usize;
+        for row in entries {
+            let idx = row.index.trim();
+            let name = row.unique_name.trim();
+            if idx.is_empty() || name.is_empty() || self.clusters_by_index.contains_key(idx) {
+                continue;
+            }
+            let kind = if idx.contains("MISTS") || name.to_uppercase().contains("MIST") {
+                "mists"
+            } else if idx.contains("HELLGATE") {
+                "hellgate"
+            } else if idx.contains("CORRUPTED") {
+                "corruptedDungeon"
+            } else if idx.starts_with("RD_") {
+                "soloDungeon"
+            } else {
+                "openWorld"
+            };
+            let cluster = ClusterEntry {
+                index: idx.to_string(),
+                name_fr: name.to_string(),
+                name_en: name.to_string(),
+                kind: kind.into(),
+                tier: 6,
+            };
+            self.clusters_by_index.insert(idx.to_string(), cluster);
             added += 1;
         }
         Ok(added)
@@ -288,5 +348,18 @@ mod tests {
         assert_eq!(item.tier, 8);
         assert_eq!(item.enchantment, 3);
         assert_eq!(item.slot, "mainHand");
+
+        let world_sample = r#"[
+            { "Index": "MISTS_999", "UniqueName": "Lethal Greater Mists" }
+        ]"#;
+        let world_added = catalog.merge_ao_bin_dumps_world(world_sample).unwrap();
+        assert_eq!(world_added, 1);
+        let cluster = catalog.cluster("MISTS_999").unwrap();
+        assert_eq!(cluster.kind, "mists");
+
+        let exported = catalog.export_raw();
+        let reloaded = Catalog::from_raw(exported);
+        assert_eq!(reloaded.item_count(), catalog.item_count());
+        assert_eq!(reloaded.cluster_count(), catalog.cluster_count());
     }
 }

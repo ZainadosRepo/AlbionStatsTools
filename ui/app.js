@@ -1,5 +1,6 @@
 import {
   buildAlbionDataPriceUrl,
+  buildAlbionItemIconUrl,
   formatDuration,
   formatExactInt,
   formatMeterClipboard,
@@ -21,6 +22,8 @@ let settings = { ...DEFAULT_SETTINGS };
 let latestState = null;
 let selectedPlayerName = null;
 let selectedSnapshotId = "live";
+let activeTab = "combat";
+let lastStateSignature = "";
 let toastTimer = null;
 
 const el = (id) => document.getElementById(id);
@@ -42,6 +45,12 @@ const escapeHtml = (str) =>
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+
+const renderItemThumb = (uniqueName, size = 36, cls = "item-icon-sm") => {
+  const url = buildAlbionItemIconUrl(uniqueName, size);
+  if (!url) return "";
+  return `<img class="${cls}" src="${escapeHtml(url)}" alt="" loading="lazy" onerror="this.hidden=true" />`;
+};
 
 const persistSettings = async () => {
   try {
@@ -113,6 +122,16 @@ const renderHeader = () => {
     badge.title = cap.detail || "";
   }
 
+  const elevateBtn = el("btn-elevate");
+  if (elevateBtn && cap) {
+    elevateBtn.hidden = !cap.needsElevation;
+  }
+
+  const catCount = el("catalog-count");
+  if (catCount && snap.catalogItemCount) {
+    catCount.textContent = formatExactInt(snap.catalogItemCount);
+  }
+
   const lp = snap.localPlayer;
   const guildTag = lp.guildName ? ` [${lp.guildName}]` : "";
   el("header-player-name").textContent = `${lp.username}${guildTag}`;
@@ -122,6 +141,7 @@ const renderHeader = () => {
 
 const renderSnapshotSelect = () => {
   const select = el("snapshot-select");
+  const delBtn = el("btn-delete-snapshot");
   const snaps = latestState?.snapshot?.snapshots || [];
   if (!select) return;
 
@@ -136,6 +156,9 @@ const renderSnapshotSelect = () => {
   } else {
     selectedSnapshotId = "live";
     select.value = "live";
+  }
+  if (delBtn) {
+    delBtn.hidden = selectedSnapshotId === "live";
   }
 };
 
@@ -161,12 +184,14 @@ const renderCombatTab = () => {
   container.innerHTML = ranked
     .map((p) => {
       const isSel = p.name === selectedPlayerName;
+      const weaponThumb = renderItemThumb(p.weaponUniqueName, 44, "item-icon");
       return `
         <div class="meter-row ${isSel ? "selected" : ""}" data-player-name="${escapeHtml(p.name)}">
           <div class="meter-bar-fill meter-bar-${escapeHtml(settings.meterMode)}" style="width: ${p.barPercent.toFixed(1)}%"></div>
           <div class="meter-row-content">
             <div class="meter-left">
               <span class="meter-rank">${p.rank}</span>
+              ${weaponThumb}
               <div class="meter-ident">
                 <span class="meter-name">${escapeHtml(p.name)} ${p.isSelf ? "★" : ""}</span>
                 <span class="meter-weapon">${escapeHtml(p.weaponNameFr)}</span>
@@ -369,7 +394,12 @@ const renderGatheringTab = () => {
           .map(
             (g) => `
           <tr>
-            <td><strong>${escapeHtml(g.nameFr)}</strong></td>
+            <td>
+              <span class="cell-with-icon">
+                ${renderItemThumb(g.uniqueName, 36)}
+                <strong>${escapeHtml(g.nameFr)}</strong>
+              </span>
+            </td>
             <td>T${g.tier}.${g.enchantment}</td>
             <td>${g.standardAmount}</td>
             <td>+${g.collectorBonus}</td>
@@ -411,7 +441,10 @@ const renderLootAndInspectTab = () => {
               (sl) => `
             <div class="slot-item">
               <span class="slot-tag">${escapeHtml(sl.slot)}</span>
-              <span>${escapeHtml(sl.nameFr)}</span>
+              <span class="slot-item-val">
+                ${renderItemThumb(sl.uniqueName, 32)}
+                <span>${escapeHtml(sl.nameFr)}</span>
+              </span>
             </div>
           `,
             )
@@ -445,7 +478,12 @@ const renderLootAndInspectTab = () => {
             <tr>
               <td><strong>${escapeHtml(l.lootedBy)}</strong></td>
               <td>${escapeHtml(l.lootedFrom)}</td>
-              <td>${escapeHtml(l.nameFr)}</td>
+              <td>
+                <span class="cell-with-icon">
+                  ${renderItemThumb(l.uniqueName, 36)}
+                  <span>${escapeHtml(l.nameFr)}</span>
+                </span>
+              </td>
               <td>×${l.quantity}</td>
               <td>${formatExactInt(l.estimatedSilver)} Ag</td>
             </tr>
@@ -485,7 +523,12 @@ const renderCapturedMarketOrders = () => {
             (o) => `
           <tr>
             <td><span class="badge-subtle">${o.isRequest ? "Achat" : "Offre Q" + o.qualityLevel}</span></td>
-            <td><strong>${escapeHtml(o.itemNameFr)}</strong></td>
+            <td>
+              <span class="cell-with-icon">
+                ${renderItemThumb(o.itemUniqueName, 36)}
+                <strong>${escapeHtml(o.itemNameFr)}</strong>
+              </span>
+            </td>
             <td>×${o.amount}</td>
             <td>${formatExactInt(o.unitPriceSilver)} Ag</td>
             <td>${formatExactInt(o.totalPriceSilver)} Ag</td>
@@ -498,7 +541,12 @@ const renderCapturedMarketOrders = () => {
             (m) => `
           <tr>
             <td><span class="status-badge status-live">Courrier Vendu</span></td>
-            <td><strong>${escapeHtml(m.itemNameFr)}</strong></td>
+            <td>
+              <span class="cell-with-icon">
+                ${renderItemThumb(m.itemUniqueName, 36)}
+                <strong>${escapeHtml(m.itemNameFr)}</strong>
+              </span>
+            </td>
             <td>×${m.amount}</td>
             <td>${formatExactInt(m.unitPriceSilver)} Ag</td>
             <td>${formatExactInt(m.totalPriceSilver)} Ag</td>
@@ -596,7 +644,12 @@ const fetchAlbionDataPrices = async () => {
             .map(
               (r) => `
             <tr>
-              <td><strong>${escapeHtml(r.itemId)}</strong></td>
+              <td>
+                <span class="cell-with-icon">
+                  ${renderItemThumb(r.itemId, 36)}
+                  <strong>${escapeHtml(r.itemId)}</strong>
+                </span>
+              </td>
               <td>${formatExactInt(r.bestSellPrice)} Ag (${escapeHtml(r.bestSellCity)})</td>
               <td>${formatExactInt(r.bestBuyOrder)} Ag (${escapeHtml(r.bestBuyCity)})</td>
               <td>${formatExactInt(r.spreadSilver)} Ag (${r.spreadPercent.toFixed(1)}%)</td>
@@ -612,6 +665,56 @@ const fetchAlbionDataPrices = async () => {
   }
 };
 
+const syncCatalogFromGitHub = async () => {
+  const btn = el("btn-sync-catalog");
+  if (btn) btn.disabled = true;
+  showToast("Téléchargement de la base d'objets et zones Albion (ao-bin-dumps)…");
+  try {
+    const [itemsResp, worldResp] = await Promise.all([
+      fetch("https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master/formatted/items.json"),
+      fetch("https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master/formatted/world.json").catch(() => null),
+    ]);
+    if (!itemsResp.ok) throw new Error(`HTTP ${itemsResp.status}`);
+    const itemsText = await itemsResp.text();
+    const worldText = worldResp && worldResp.ok ? await worldResp.text() : null;
+    const added = await invokeCmd("import_ao_bin_dumps", {
+      jsonText: itemsText,
+      worldJson: worldText,
+    });
+    await refreshState(true);
+    showToast(`Catalogue synchronisé et mis en cache (+${formatExactInt(added || 0)} entrées) !`);
+  } catch (err) {
+    showToast(`Échec synchronisation ao-bin-dumps : ${err.message || err}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+
+const renderActiveTab = () => {
+  switch (activeTab) {
+    case "session":
+      renderSessionTab();
+      break;
+    case "dungeons":
+      renderDungeonsTab();
+      break;
+    case "gathering":
+      renderGatheringTab();
+      break;
+    case "loot":
+      renderLootAndInspectTab();
+      break;
+    case "economy":
+      renderCapturedMarketOrders();
+      break;
+    case "combat":
+    default:
+      renderSnapshotSelect();
+      renderCombatTab();
+      break;
+  }
+};
+
 const renderAll = () => {
   renderHeader();
   renderSnapshotSelect();
@@ -623,11 +726,36 @@ const renderAll = () => {
   renderCapturedMarketOrders();
 };
 
-const refreshState = async () => {
+const computeStateSignature = (res) => {
+  const s = res?.snapshot;
+  const c = res?.capture;
+  if (!s) return "";
+  return [
+    s.network?.packetsProcessed || 0,
+    s.network?.telemetryEventsProcessed || 0,
+    c?.rawDatagramsSeen || 0,
+    c?.mode || "",
+    c?.needsElevation ? 1 : 0,
+    s.catalogItemCount || 0,
+    s.snapshots?.length || 0,
+    s.localPlayer?.inCombat ? Math.floor(s.combatSeconds || 0) : 0,
+  ].join(":");
+};
+
+const refreshState = async (force = false) => {
   const res = await invokeCmd("get_state");
-  if (res) {
-    latestState = res;
+  if (!res) return;
+  const sig = computeStateSignature(res);
+  latestState = res;
+  if (!force && sig === lastStateSignature) {
+    return;
+  }
+  lastStateSignature = sig;
+  if (force) {
     renderAll();
+  } else {
+    renderHeader();
+    renderActiveTab();
   }
 };
 
@@ -635,11 +763,13 @@ const initEvents = () => {
   // Navigation tabs
   document.querySelectorAll(".nav-tab").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const target = btn.getAttribute("data-tab");
+      const target = btn.getAttribute("data-tab") || "combat";
+      activeTab = target;
       document.querySelectorAll(".nav-tab").forEach((b) => b.classList.toggle("active", b === btn));
       document.querySelectorAll(".tab-panel").forEach((p) => {
         p.classList.toggle("active", p.id === `tab-${target}`);
       });
+      renderActiveTab();
     });
   });
 
@@ -655,18 +785,42 @@ const initEvents = () => {
     });
   });
 
-  // Snapshot selector
+  // Snapshot selector & delete button
   el("snapshot-select")?.addEventListener("change", (ev) => {
     selectedSnapshotId = ev.target.value || "live";
+    renderSnapshotSelect();
     renderCombatTab();
   });
 
+  el("btn-delete-snapshot")?.addEventListener("click", async () => {
+    if (selectedSnapshotId === "live") return;
+    const deleted = await invokeCmd("delete_snapshot", { id: selectedSnapshotId });
+    if (deleted) {
+      selectedSnapshotId = "live";
+      await refreshState(true);
+      showToast("Snapshot supprimé.");
+    }
+  });
+
   // Titlebar controls
+  el("btn-elevate")?.addEventListener("click", async () => {
+    try {
+      await invokeCmd("relaunch_as_admin");
+    } catch (err) {
+      showToast(`${err}`);
+    }
+  });
+
+  el("btn-sync-catalog")?.addEventListener("click", () => {
+    syncCatalogFromGitHub();
+  });
+
   el("btn-simulate")?.addEventListener("click", async () => {
     const res = await invokeCmd("simulate_session");
     if (res) {
       latestState = res;
       selectedSnapshotId = "live";
+      lastStateSignature = computeStateSignature(res);
       renderAll();
       showToast("Scénario Photon UDP (combat 5v5, brumes, récolte, butin, marché) injecté !");
     }
@@ -709,7 +863,7 @@ const initEvents = () => {
   el("btn-snapshot-meter")?.addEventListener("click", async () => {
     const snap = await invokeCmd("take_snapshot", { label: null });
     if (snap) {
-      await refreshState();
+      await refreshState(true);
       showToast(`Snapshot enregistré : ${snap.label}`);
     } else {
       showToast("Aucun combat actif à sauvegarder.");
@@ -721,6 +875,7 @@ const initEvents = () => {
     if (res) {
       latestState = res;
       selectedSnapshotId = "live";
+      lastStateSignature = computeStateSignature(res);
       renderAll();
       showToast("Compteur de combat réinitialisé.");
     }
@@ -730,6 +885,7 @@ const initEvents = () => {
     const res = await invokeCmd("reset_session");
     if (res) {
       latestState = res;
+      lastStateSignature = computeStateSignature(res);
       renderAll();
       showToast("Compteurs de session réinitialisés.");
     }
@@ -779,10 +935,10 @@ const boot = async () => {
   if (regSelect) regSelect.value = settings.region;
 
   await applyWindowPreferences();
-  await refreshState();
+  await refreshState(true);
   await updateCraftingSimulation();
 
-  setInterval(refreshState, settings.autoRefreshMs);
+  setInterval(() => refreshState(false), settings.autoRefreshMs);
 };
 
 boot();

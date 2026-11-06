@@ -48,7 +48,10 @@ fn get_state(state: tauri::State<AppState>) -> Result<FullStatusResponse, String
 }
 
 #[tauri::command]
-fn simulate_session(state: tauri::State<AppState>) -> Result<FullStatusResponse, String> {
+fn simulate_session(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<FullStatusResponse, String> {
     let now = now_unix_ms();
     {
         let mut eng = state
@@ -56,6 +59,7 @@ fn simulate_session(state: tauri::State<AppState>) -> Result<FullStatusResponse,
             .lock()
             .map_err(|_| "verrou moteur indisponible".to_string())?;
         eng.run_wire_simulation_scenario(now);
+        persist_history_best_effort(&app, &eng);
     }
     get_state(state)
 }
@@ -73,7 +77,10 @@ fn reset_meter(state: tauri::State<AppState>) -> Result<FullStatusResponse, Stri
 }
 
 #[tauri::command]
-fn reset_session(state: tauri::State<AppState>) -> Result<FullStatusResponse, String> {
+fn reset_session(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<FullStatusResponse, String> {
     let now = now_unix_ms();
     {
         let mut eng = state
@@ -81,12 +88,14 @@ fn reset_session(state: tauri::State<AppState>) -> Result<FullStatusResponse, St
             .lock()
             .map_err(|_| "verrou moteur indisponible".to_string())?;
         eng.reset_session(now);
+        persist_history_best_effort(&app, &eng);
     }
     get_state(state)
 }
 
 #[tauri::command]
 fn take_snapshot(
+    app: AppHandle,
     state: tauri::State<AppState>,
     label: Option<String>,
 ) -> Result<Option<MeterSnapshot>, String> {
@@ -95,16 +104,28 @@ fn take_snapshot(
         .engine
         .lock()
         .map_err(|_| "verrou moteur indisponible".to_string())?;
-    Ok(eng.take_snapshot(label, now))
+    let snap = eng.take_snapshot(label, now);
+    if snap.is_some() {
+        persist_history_best_effort(&app, &eng);
+    }
+    Ok(snap)
 }
 
 #[tauri::command]
-fn delete_snapshot(state: tauri::State<AppState>, id: String) -> Result<bool, String> {
+fn delete_snapshot(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+    id: String,
+) -> Result<bool, String> {
     let mut eng = state
         .engine
         .lock()
         .map_err(|_| "verrou moteur indisponible".to_string())?;
-    Ok(eng.delete_snapshot(&id))
+    let deleted = eng.delete_snapshot(&id);
+    if deleted {
+        persist_history_best_effort(&app, &eng);
+    }
+    Ok(deleted)
 }
 
 #[tauri::command]
@@ -131,20 +152,60 @@ fn list_catalog_items(state: tauri::State<AppState>) -> Result<Vec<ItemEntry>, S
 }
 
 #[tauri::command]
-fn import_ao_bin_dumps(state: tauri::State<AppState>, json_text: String) -> Result<usize, String> {
+fn import_ao_bin_dumps(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+    json_text: String,
+    world_json: Option<String>,
+) -> Result<usize, String> {
     let mut eng = state
         .engine
         .lock()
         .map_err(|_| "verrou moteur indisponible".to_string())?;
-    eng.catalog.merge_ao_bin_dumps_items(&json_text)
+    let mut added = eng.catalog.merge_ao_bin_dumps_items(&json_text)?;
+    if let Some(w_json) = world_json {
+        if !w_json.trim().is_empty() {
+            added += eng.catalog.merge_ao_bin_dumps_world(&w_json).unwrap_or(0);
+        }
+    }
+    if let Ok(path) = catalog_cache_path(&app) {
+        if let Ok(raw_val) = serde_json::to_value(eng.catalog.export_raw()) {
+            let _ = settings::save(&path, &raw_val);
+        }
+    }
+    Ok(added)
+}
+
+#[tauri::command]
+fn relaunch_as_admin(app: AppHandle) -> Result<(), String> {
+    capture::relaunch_as_admin()?;
+    app.exit(0);
+    Ok(())
+}
+
+fn config_file_path(app: &AppHandle, filename: &str) -> Result<std::path::PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    Ok(dir.join(filename))
 }
 
 fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    Ok(app
-        .path()
-        .app_config_dir()
-        .map_err(|e| e.to_string())?
-        .join("settings.json"))
+    config_file_path(app, "settings.json")
+}
+
+fn history_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    config_file_path(app, "session_history.json")
+}
+
+fn catalog_cache_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    config_file_path(app, "catalog_cache.json")
+}
+
+fn persist_history_best_effort(app: &AppHandle, eng: &AnalyzerEngine) {
+    if let Ok(path) = history_path(app) {
+        if let Ok(val) = serde_json::to_value(eng.export_history()) {
+            let _ = settings::save(&path, &val);
+        }
+    }
 }
 
 #[tauri::command]
@@ -204,6 +265,26 @@ pub fn run() {
             shortcut_error: OnceLock::new(),
         })
         .setup(move |app| {
+            let handle = app.handle();
+            // Restore cached catalog and persisted session history if present
+            if let Ok(mut eng) = app.state::<AppState>().engine.lock() {
+                if let Ok(cat_path) = catalog_cache_path(handle) {
+                    if let Ok(text) = std::fs::read_to_string(&cat_path) {
+                        if let Ok(cached_cat) = Catalog::from_json_str(&text) {
+                            if cached_cat.item_count() >= eng.catalog.item_count() {
+                                eng.catalog = cached_cat;
+                            }
+                        }
+                    }
+                }
+                if let Ok(hist_path) = history_path(handle) {
+                    if let Ok(text) = std::fs::read_to_string(&hist_path) {
+                        if let Ok(hist) = serde_json::from_str(&text) {
+                            eng.restore_history(hist);
+                        }
+                    }
+                }
+            }
             if let Err(e) = app.global_shortcut().register(toggle) {
                 let _ = app.state::<AppState>().shortcut_error.set(e.to_string());
             }
@@ -221,6 +302,7 @@ pub fn run() {
             export_loot_csv,
             list_catalog_items,
             import_ao_bin_dumps,
+            relaunch_as_admin,
             load_settings,
             save_settings
         ])

@@ -16,6 +16,9 @@
           <span id="capture-badge" class="status-badge status-standby" title="État de la capture Photon UDP 5056">
             Initialisation…
           </span>
+          <button id="btn-elevate" class="tb-btn tb-btn-accent" type="button" title="Relancer Albion Stats en Administrateur pour activer la capture directe sur le port UDP 5056" hidden>
+            🛡 Activer Capture Admin
+          </button>
         </div>
 
         <div id="player-pill" class="player-pill" data-tauri-drag-region>
@@ -27,6 +30,9 @@
         </div>
 
         <div class="titlebar-actions">
+          <button id="btn-sync-catalog" class="tb-btn" type="button" title="Télécharger et mettre en cache le catalogue complet ao-bin-dumps (objets + zones)">
+            📦 Base (<span id="catalog-count">60</span>)
+          </button>
           <button id="btn-simulate" class="tb-btn tb-btn-accent" type="button" title="Injecter un scénario réseau Photon complet (combat 5v5, brumes, récolte, butin, marché)">
             ⚡ Simuler Session
           </button>
@@ -91,9 +97,14 @@
             <div class="card meter-card">
               <div class="card-header">
                 <h2>Classement du Groupe</h2>
-                <select id="snapshot-select" class="select-input" aria-label="Choisir un combat enregistré">
-                  <option value="live">🔴 Combat en direct</option>
-                </select>
+                <div class="inline-controls">
+                  <select id="snapshot-select" class="select-input" aria-label="Choisir un combat enregistré">
+                    <option value="live">🔴 Combat en direct</option>
+                  </select>
+                  <button id="btn-delete-snapshot" class="btn btn-danger" type="button" title="Supprimer ce snapshot" hidden>
+                    🗑
+                  </button>
+                </div>
               </div>
               <div id="meter-rows" class="meter-rows"></div>
             </div>

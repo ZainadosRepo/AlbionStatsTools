@@ -15,6 +15,7 @@ pub struct CaptureStatus {
     pub bind_address: String,
     pub detail: String,
     pub raw_datagrams_seen: u64,
+    pub needs_elevation: bool,
 }
 
 impl Default for CaptureStatus {
@@ -24,6 +25,7 @@ impl Default for CaptureStatus {
             bind_address: "0.0.0.0:5056".into(),
             detail: "Initialisation de l'écoute passive Photon UDP (port 5056)…".into(),
             raw_datagrams_seen: 0,
+            needs_elevation: false,
         }
     }
 }
@@ -42,6 +44,53 @@ pub fn detect_outbound_ipv4() -> Option<Ipv4Addr> {
     match sock.local_addr().ok()?.ip() {
         IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_unspecified() => Some(ip),
         _ => None,
+    }
+}
+
+/// Relaunches the current executable on Windows via UAC (`ShellExecuteW` with `"runas"`).
+pub fn relaunch_as_admin() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+
+        #[link(name = "shell32")]
+        extern "system" {
+            fn ShellExecuteW(
+                hwnd: usize,
+                lpOperation: *const u16,
+                lpFile: *const u16,
+                lpParameters: *const u16,
+                lpDirectory: *const u16,
+                nShowCmd: i32,
+            ) -> isize;
+        }
+
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+        let mut file: Vec<u16> = exe.as_os_str().encode_wide().collect();
+        file.push(0);
+
+        // SAFETY: Null-terminated UTF-16 buffers passed to ShellExecuteW.
+        let res = unsafe {
+            ShellExecuteW(
+                0,
+                verb.as_ptr(),
+                file.as_ptr(),
+                core::ptr::null::<u16>(),
+                core::ptr::null::<u16>(),
+                1,
+            )
+        };
+        if res <= 32 {
+            return Err(format!(
+                "Élévation Administrateur annulée ou refusée (code ShellExecute {res})"
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("L'élévation UAC automatique n'est disponible que sous Windows.".into())
     }
 }
 
@@ -90,6 +139,7 @@ pub fn start_background_capture(
             st.bind_address = "127.0.0.1:50560".into();
             st.detail =
                 "Mode veille actif (relais UDP local 127.0.0.1:50560 + simulateur Photon)".into();
+            st.needs_elevation = false;
         }
     }
 }
@@ -138,6 +188,7 @@ fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mute
             st.mode = "standby".into();
             st.bind_address = "127.0.0.1:50560".into();
             st.detail = "Aucune interface IPv4 active détectée — simulateur prêt".into();
+            st.needs_elevation = false;
         }
         return;
     };
@@ -154,8 +205,9 @@ fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mute
                 st.mode = "standby".into();
                 st.bind_address = format!("{local_ip}:5056");
                 st.detail = format!(
-                    "Mode standard non-administrateur (code Winsock {code}) — lancez en Administrateur pour la capture directe ou utilisez le simulateur"
+                    "Mode standard non-administrateur (code Winsock {code}) — cliquez sur « Activer Capture Admin » ou utilisez le simulateur"
                 );
+                st.needs_elevation = true;
             }
             return;
         }
@@ -179,6 +231,7 @@ fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mute
                 st.mode = "standby".into();
                 st.bind_address = format!("{local_ip}:5056");
                 st.detail = format!("Bind raw socket refusé (code {code}) — mode veille actif");
+                st.needs_elevation = true;
             }
             return;
         }
@@ -214,8 +267,9 @@ fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mute
                 st.mode = "standby".into();
                 st.bind_address = format!("{local_ip}:5056");
                 st.detail = format!(
-                    "SIO_RCVALL requiert les droits Administrateur (code {code}) — simulateur et relais prêts"
+                    "SIO_RCVALL requiert les droits Administrateur (code {code}) — cliquez sur « Activer Capture Admin »"
                 );
+                st.needs_elevation = true;
             }
             return;
         }
@@ -225,6 +279,7 @@ fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mute
             st.bind_address = format!("{local_ip}:5056");
             st.detail =
                 format!("Capture directe Photon active sur {local_ip} (UDP 5056/5055/4535)");
+            st.needs_elevation = false;
         }
 
         let mut buf = vec![0u8; 65_535];

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildAlbionDataPriceUrl,
+  buildAlbionItemIconUrl,
   formatDuration,
   formatExactInt,
   formatMeterClipboard,
@@ -112,4 +113,15 @@ test("buildAlbionDataPriceUrl and summarizeMarketPrices compute arbitrage spread
   assert.equal(summary[0].bestBuyOrder, 445000);
   assert.equal(summary[0].bestBuyCity, "Caerleon");
   assert.equal(summary[0].spreadSilver, 35000);
+});
+
+test("buildAlbionItemIconUrl builds official render URLs and ignores placeholders", () => {
+  assert.equal(
+    buildAlbionItemIconUrl("T8_2H_BOW_AVALON@2", 48),
+    "https://render.albiononline.com/v1/item/T8_2H_BOW_AVALON%402.png?size=48",
+  );
+  assert.equal(buildAlbionItemIconUrl("UNARMED"), null);
+  assert.equal(buildAlbionItemIconUrl("SILVER"), null);
+  assert.equal(buildAlbionItemIconUrl("ITEM_9999"), null);
+  assert.equal(buildAlbionItemIconUrl(""), null);
 });
