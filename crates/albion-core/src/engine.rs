@@ -297,6 +297,22 @@ pub struct AppSnapshot {
     pub network: NetworkDiagnostics,
 }
 
+/// Subset of session history persisted to disk across application restarts.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedHistory {
+    #[serde(default)]
+    pub snapshots: Vec<MeterSnapshot>,
+    #[serde(default)]
+    pub dungeons: Vec<DungeonRun>,
+    #[serde(default)]
+    pub gathering_totals: GatheringTotals,
+    #[serde(default)]
+    pub gathering_log: Vec<GatheringEntry>,
+    #[serde(default)]
+    pub loot_log: Vec<LootLogEntry>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct InternalSpellAccum {
     ticks: u32,
