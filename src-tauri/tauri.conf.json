@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Albion Stats",
+  "version": "0.1.0",
+  "identifier": "fr.zainadosrepo.albionstats",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Albion Stats",
+        "width": 1060,
+        "height": 720,
+        "minWidth": 360,
+        "minHeight": 260,
+        "resizable": true,
+        "alwaysOnTop": false,
+        "decorations": false,
+        "transparent": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://europe.albion-online-data.com https://west.albion-online-data.com https://east.albion-online-data.com https://raw.githubusercontent.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://render.albiononline.com"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "dmg"],
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQzRDhBMUVDODA5NzZGNDYKUldSR2I1ZUE3S0hZMDdzSElwenpmSVc4bmFTOEQvVGlOaXpSR3RZWlN1Ynh2Tmk1VjNEZFE5anUK",
+      "endpoints": [
+        "https://github.com/ZainadosRepo/AlbionStatsTools/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}
