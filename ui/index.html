@@ -30,7 +30,7 @@
         </div>
 
         <div class="titlebar-actions">
-          <button id="btn-sync-catalog" class="tb-btn" type="button" title="Télécharger et mettre en cache le catalogue complet ao-bin-dumps (objets + zones)">
+          <button id="btn-sync-catalog" class="tb-btn" type="button" title="Télécharger et mettre en cache le catalogue complet ao-bin-dumps (objets + zones + sorts)">
             📦 Base (<span id="catalog-count">60</span>)
           </button>
           <button id="btn-simulate" class="tb-btn tb-btn-accent" type="button" title="Injecter un scénario réseau Photon complet (combat 5v5, brumes, récolte, butin, marché)">
@@ -39,6 +39,10 @@
           <button id="btn-compact" class="tb-btn" type="button" title="Basculer le mode mini-overlay de combat">
             ◫ Overlay
           </button>
+          <input id="overlay-opacity" class="opacity-slider" type="range" min="35" max="100" value="96" title="Opacité de la fenêtre overlay" aria-label="Opacité de la fenêtre overlay" />
+          <button id="btn-click-through" class="tb-btn" type="button" title="Mode souris traversante (Ctrl+Alt+L pour verrouiller/déverrouiller)">
+            👻
+          </button>
           <button id="btn-pin" class="tb-btn" type="button" title="Épingler au-dessus du jeu (Ctrl+Alt+M pour afficher/masquer)">
             📌
           </button>
@@ -46,6 +50,10 @@
           <button id="btn-close" class="tb-btn tb-btn-close" type="button" title="Fermer">✕</button>
         </div>
       </header>
+
+      <div id="click-through-banner" class="click-through-banner" hidden>
+        👻 Mode souris traversante actif — appuyez sur <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>L</kbd> pour déverrouiller l'interface
+      </div>
 
       <!-- Navigation Bar -->
       <nav id="main-nav" class="nav-tabs" aria-label="Sections principales">
@@ -299,6 +307,16 @@
                   </button>
                 </div>
               </div>
+              <div class="market-search-bar">
+                <div class="market-search-field">
+                  <input id="market-search-input" type="text" placeholder="Rechercher un objet (ex: Sanctificateur, Lames, T8_BAG)…" autocomplete="off" spellcheck="false" aria-label="Rechercher un objet à suivre" />
+                  <div id="market-search-results" class="search-dropdown" hidden></div>
+                </div>
+                <button id="btn-price-session" class="btn btn-secondary" type="button" title="Évaluer le butin et la récolte de la session aux prix réels du marché">
+                  🎒 Valoriser Session
+                </button>
+              </div>
+              <div id="session-valuation-banner" class="valuation-banner" hidden></div>
               <div id="api-price-rows" class="table-wrap"></div>
               <h3 class="sub-heading">Ordres du Marché &amp; Courriers Capturés en Jeu</h3>
               <div id="captured-market-rows" class="table-wrap"></div>

@@ -3,6 +3,9 @@ import test from "node:test";
 import {
   buildAlbionDataPriceUrl,
   buildAlbionItemIconUrl,
+  buildAlbionSpellIconUrl,
+  collectSessionPriceableItems,
+  computeSessionMarketValue,
   formatDuration,
   formatExactInt,
   formatMeterClipboard,
@@ -124,4 +127,45 @@ test("buildAlbionItemIconUrl builds official render URLs and ignores placeholder
   assert.equal(buildAlbionItemIconUrl("SILVER"), null);
   assert.equal(buildAlbionItemIconUrl("ITEM_9999"), null);
   assert.equal(buildAlbionItemIconUrl(""), null);
+});
+
+test("buildAlbionSpellIconUrl builds official spell render URLs and ignores placeholders", () => {
+  assert.equal(
+    buildAlbionSpellIconUrl("HOLYSTAFF_HEAL_BURST", 32),
+    "https://render.albiononline.com/v1/spell/HOLYSTAFF_HEAL_BURST.png?size=32",
+  );
+  assert.equal(buildAlbionSpellIconUrl("SPELL_4521"), null);
+  assert.equal(buildAlbionSpellIconUrl(""), null);
+  assert.equal(buildAlbionSpellIconUrl(null), null);
+});
+
+test("collectSessionPriceableItems aggregates loot and gathering quantities", () => {
+  const { items, qtyByItem } = collectSessionPriceableItems({
+    lootLog: [
+      { uniqueName: "T8_BAG_INSIGHT", quantity: 1 },
+      { uniqueName: "SILVER", quantity: 12000 },
+      { uniqueName: "ITEM_4242", quantity: 3 },
+      { uniqueName: "T8_BAG_INSIGHT", quantity: 2 },
+    ],
+    gatheringLog: [
+      { uniqueName: "T6_WOOD_LEVEL1@1", totalAmount: 14 },
+      { uniqueName: "T6_WOOD_LEVEL1@1", totalAmount: 6 },
+      { uniqueName: "T5_ORE", totalAmount: 0 },
+    ],
+  });
+  assert.deepEqual(items, ["T8_BAG_INSIGHT", "T6_WOOD_LEVEL1@1"]);
+  assert.equal(qtyByItem.T8_BAG_INSIGHT, 3);
+  assert.equal(qtyByItem["T6_WOOD_LEVEL1@1"], 20);
+  assert.deepEqual(collectSessionPriceableItems(null), { items: [], qtyByItem: {} });
+
+  const value = computeSessionMarketValue(
+    [
+      { itemId: "T8_BAG_INSIGHT", bestSellPrice: 100000, bestBuyOrder: 90000 },
+      { itemId: "T6_WOOD_LEVEL1@1", bestSellPrice: 0, bestBuyOrder: 500 },
+      { itemId: "T4_UNKNOWN", bestSellPrice: 999, bestBuyOrder: 0 },
+    ],
+    qtyByItem,
+  );
+  assert.equal(value.total, 310000);
+  assert.equal(value.pricedItems, 2);
 });

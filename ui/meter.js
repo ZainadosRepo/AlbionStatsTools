@@ -225,3 +225,49 @@ export const buildAlbionItemIconUrl = (uniqueName, size = 40) => {
   const px = Math.max(16, Math.min(217, Math.round(Number(size) || 40)));
   return `https://render.albiononline.com/v1/item/${encodeURIComponent(clean)}.png?size=${px}`;
 };
+
+export const buildAlbionSpellIconUrl = (uniqueName, size = 36) => {
+  const clean = String(uniqueName ?? "").trim();
+  if (!clean || /^SPELL_\d+$/.test(clean) || clean === "UNKNOWN") {
+    return null;
+  }
+  const px = Math.max(16, Math.min(217, Math.round(Number(size) || 36)));
+  return `https://render.albiononline.com/v1/spell/${encodeURIComponent(clean)}.png?size=${px}`;
+};
+
+const isPriceableUniqueName = (name) =>
+  typeof name === "string" &&
+  name.length > 0 &&
+  name !== "SILVER" &&
+  name !== "UNARMED" &&
+  !name.startsWith("ITEM_") &&
+  /^T\d_[A-Z0-9_@]+$/.test(name);
+
+/** Collects unique priceable Albion item ids and quantities from loot and gathering logs. */
+export const collectSessionPriceableItems = (snapshot) => {
+  const qtyByItem = {};
+  const add = (name, qty) => {
+    const clean = String(name ?? "").trim();
+    const amount = Math.max(0, Math.round(Number(qty) || 0));
+    if (!isPriceableUniqueName(clean) || amount <= 0) return;
+    qtyByItem[clean] = (qtyByItem[clean] || 0) + amount;
+  };
+  for (const l of snapshot?.lootLog || []) add(l?.uniqueName, l?.quantity);
+  for (const g of snapshot?.gatheringLog || []) add(g?.uniqueName, g?.totalAmount);
+  return { items: Object.keys(qtyByItem), qtyByItem };
+};
+
+/** Sums the live market value of a session using best sell prices (falls back to buy orders). */
+export const computeSessionMarketValue = (summarized = [], qtyByItem = {}) => {
+  let total = 0;
+  let pricedItems = 0;
+  for (const row of summarized) {
+    const qty = Number(qtyByItem[row.itemId]) || 0;
+    const unit = row.bestSellPrice > 0 ? row.bestSellPrice : row.bestBuyOrder;
+    if (qty > 0 && unit > 0) {
+      total += unit * qty;
+      pricedItems += 1;
+    }
+  }
+  return { total, pricedItems };
+};

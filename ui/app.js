@@ -1,6 +1,9 @@
 import {
   buildAlbionDataPriceUrl,
   buildAlbionItemIconUrl,
+  buildAlbionSpellIconUrl,
+  collectSessionPriceableItems,
+  computeSessionMarketValue,
   formatDuration,
   formatExactInt,
   formatMeterClipboard,
@@ -25,6 +28,10 @@ let selectedSnapshotId = "live";
 let activeTab = "combat";
 let lastStateSignature = "";
 let toastTimer = null;
+let searchTimer = null;
+let searchSeq = 0;
+let lastPriceRows = [];
+const itemInfoCache = new Map();
 
 const el = (id) => document.getElementById(id);
 
@@ -52,6 +59,12 @@ const renderItemThumb = (uniqueName, size = 36, cls = "item-icon-sm") => {
   return `<img class="${cls}" src="${escapeHtml(url)}" alt="" loading="lazy" onerror="this.hidden=true" />`;
 };
 
+const renderSpellThumb = (uniqueName, size = 32) => {
+  const url = buildAlbionSpellIconUrl(uniqueName, size);
+  if (!url) return "";
+  return `<img class="item-icon-sm" src="${escapeHtml(url)}" alt="" loading="lazy" onerror="this.hidden=true" />`;
+};
+
 const persistSettings = async () => {
   try {
     await invokeCmd("save_settings", { settings });
@@ -60,11 +73,22 @@ const persistSettings = async () => {
   }
 };
 
+const applyOverlayOpacity = () => {
+  const ratio = Math.max(0.35, Math.min(1, (Number(settings.overlayOpacity) || 96) / 100));
+  document.documentElement.style.setProperty("--shell-opacity", ratio.toFixed(2));
+  const slider = el("overlay-opacity");
+  if (slider && Number(slider.value) !== settings.overlayOpacity) {
+    slider.value = String(settings.overlayOpacity);
+  }
+  if (slider) slider.title = `Opacité de la fenêtre overlay (${settings.overlayOpacity}%)`;
+};
+
 const applyWindowPreferences = async () => {
   const shell = el("app");
   shell?.classList.toggle("compact-overlay", settings.compactOverlay);
   el("btn-compact")?.classList.toggle("active", settings.compactOverlay);
   el("btn-pin")?.classList.toggle("active", settings.alwaysOnTop);
+  applyOverlayOpacity();
   if (tauriWindow?.setAlwaysOnTop) {
     try {
       await tauriWindow.setAlwaysOnTop(settings.alwaysOnTop);
@@ -130,7 +154,17 @@ const renderHeader = () => {
   const catCount = el("catalog-count");
   if (catCount && snap.catalogItemCount) {
     catCount.textContent = formatExactInt(snap.catalogItemCount);
+    const syncBtn = el("btn-sync-catalog");
+    if (syncBtn) {
+      syncBtn.title = `Catalogue : ${formatExactInt(snap.catalogItemCount)} objets • ${formatExactInt(snap.catalogSpellCount || 0)} sorts — cliquer pour synchroniser ao-bin-dumps (objets + zones + sorts)`;
+    }
   }
+
+  const clickThrough = Boolean(latestState?.clickThrough);
+  el("btn-click-through")?.classList.toggle("active", clickThrough);
+  el("app")?.classList.toggle("click-through", clickThrough);
+  const ctBanner = el("click-through-banner");
+  if (ctBanner) ctBanner.hidden = !clickThrough;
 
   const lp = snap.localPlayer;
   const guildTag = lp.guildName ? ` [${lp.guildName}]` : "";
@@ -239,7 +273,12 @@ const renderCombatTab = () => {
             .map(
               (s) => `
             <tr>
-              <td><strong>${escapeHtml(s.nameFr)}</strong></td>
+              <td>
+                <span class="cell-with-icon" title="${escapeHtml(s.uniqueName)}">
+                  ${renderSpellThumb(s.uniqueName, 32)}
+                  <strong>${escapeHtml(s.nameFr)}</strong>
+                </span>
+              </td>
               <td>${s.ticks}</td>
               <td>${formatExactInt(s.damage)}</td>
               <td>${formatExactInt(s.heal)}</td>
@@ -609,23 +648,83 @@ const updateCraftingSimulation = async () => {
   `;
 };
 
-const fetchAlbionDataPrices = async () => {
-  const wrap = el("api-price-rows");
-  wrap.innerHTML = `<div class="empty-state">Interrogation de l'API Albion Data Project (${escapeHtml(settings.region)})…</div>`;
-  const trackedItems = [
-    "T7_2H_CLEAVER_HELL@1",
-    "T8_MAIN_HOLYSTAFF_AVALON@2",
-    "T8_2H_BOW_AVALON@2",
-    "T8_2H_INFERNOSTAFF_MORGANA@2",
-    "T8_BAG_INSIGHT",
-  ];
-  const url = buildAlbionDataPriceUrl(settings.region, trackedItems, settings.selectedCities, [1, 2, 3]);
+const PRICE_CHUNK_SIZE = 40;
+
+const resolveItemInfo = async (uniqueName) => {
+  if (itemInfoCache.has(uniqueName)) return itemInfoCache.get(uniqueName);
+  let info = null;
   try {
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
-    const summarized = summarizeMarketPrices(data);
-    if (summarized.length === 0) {
+    const found = await invokeCmd("search_catalog_items", { query: uniqueName, limit: 1 });
+    if (Array.isArray(found) && found[0]?.uniqueName === uniqueName) {
+      info = found[0];
+    }
+  } catch (e) {
+    console.warn("search_catalog_items:", e);
+  }
+  itemInfoCache.set(uniqueName, info);
+  return info;
+};
+
+const fetchPriceRows = async (items) => {
+  const chunks = [];
+  for (let i = 0; i < items.length; i += PRICE_CHUNK_SIZE) {
+    chunks.push(items.slice(i, i + PRICE_CHUNK_SIZE));
+  }
+  const responses = await Promise.all(
+    chunks.map(async (chunk) => {
+      const url = buildAlbionDataPriceUrl(settings.region, chunk, settings.selectedCities, [1, 2, 3]);
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return resp.json();
+    }),
+  );
+  return summarizeMarketPrices(responses.flat());
+};
+
+const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
+  const wrap = el("api-price-rows");
+  const banner = el("session-valuation-banner");
+  const isSession = Boolean(qtyByItem);
+  const items = (customItems || settings.trackedItems || []).filter(Boolean);
+  if (!isSession && banner) banner.hidden = true;
+  if (items.length === 0) {
+    lastPriceRows = [];
+    wrap.innerHTML = `<div class="empty-state">Aucun objet suivi. Recherchez un objet ci-dessus pour l'ajouter.</div>`;
+    return;
+  }
+  wrap.innerHTML = `<div class="empty-state">Interrogation de l'API Albion Data Project (${escapeHtml(settings.region)}, ${items.length} objet(s))…</div>`;
+  try {
+    const [summarized, infos] = await Promise.all([
+      fetchPriceRows(items),
+      Promise.all(items.map((id) => resolveItemInfo(id))),
+    ]);
+    const infoById = new Map(items.map((id, i) => [id, infos[i]]));
+    const byId = new Map(summarized.map((r) => [r.itemId, r]));
+    const empty = {
+      bestSellPrice: 0,
+      bestSellCity: "-",
+      bestBuyOrder: 0,
+      bestBuyCity: "-",
+      spreadSilver: 0,
+      spreadPercent: 0,
+    };
+    // Tracked mode keeps every tracked item visible (so it can be removed); session mode only priced ones.
+    const rows = isSession
+      ? items.filter((id) => byId.has(id)).map((id) => byId.get(id))
+      : items.map((id) => byId.get(id) || { itemId: id, ...empty });
+    lastPriceRows = rows.map((r) => ({ ...r, info: infoById.get(r.itemId) || null }));
+
+    if (isSession && banner) {
+      const { total, pricedItems } = computeSessionMarketValue(summarized, qtyByItem);
+      const estimated = (latestState?.snapshot?.lootLog || []).reduce(
+        (acc, l) => acc + (Number(l.estimatedSilver) || 0),
+        0,
+      ) + (latestState?.snapshot?.gatheringTotals?.totalEstimatedSilver || 0);
+      banner.innerHTML = `🎒 Valeur marché réelle de la session : <strong>${formatExactInt(total)} Ag</strong> • ${pricedItems}/${items.length} objet(s) cotés • estimation catalogue : ${formatExactInt(estimated)} Ag`;
+      banner.hidden = false;
+    }
+
+    if (lastPriceRows.length === 0) {
       wrap.innerHTML = `<div class="empty-state">Aucun prix récent retourné pour cette région.</div>`;
       return;
     }
@@ -633,56 +732,155 @@ const fetchAlbionDataPrices = async () => {
       <table class="data-table">
         <thead>
           <tr>
-            <th>Identifiant</th>
+            <th>Objet</th>
+            ${isSession ? "<th>Qté</th>" : ""}
             <th>Meilleure Vente</th>
             <th>Meilleur Achat</th>
             <th>Écart Arbitrage</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
-          ${summarized
-            .map(
-              (r) => `
+          ${lastPriceRows
+            .map((r) => {
+              const name = r.info?.nameFr || r.itemId;
+              const hasSell = r.bestSellPrice > 0;
+              const hasBuy = r.bestBuyOrder > 0;
+              return `
             <tr>
               <td>
                 <span class="cell-with-icon">
                   ${renderItemThumb(r.itemId, 36)}
-                  <strong>${escapeHtml(r.itemId)}</strong>
+                  <span>
+                    <strong>${escapeHtml(name)}</strong>
+                    ${name !== r.itemId ? `<span class="item-id-sub">${escapeHtml(r.itemId)}</span>` : ""}
+                  </span>
                 </span>
               </td>
-              <td>${formatExactInt(r.bestSellPrice)} Ag (${escapeHtml(r.bestSellCity)})</td>
-              <td>${formatExactInt(r.bestBuyOrder)} Ag (${escapeHtml(r.bestBuyCity)})</td>
-              <td>${formatExactInt(r.spreadSilver)} Ag (${r.spreadPercent.toFixed(1)}%)</td>
+              ${isSession ? `<td>×${formatExactInt(qtyByItem[r.itemId] || 0)}</td>` : ""}
+              <td>${hasSell ? `${formatExactInt(r.bestSellPrice)} Ag (${escapeHtml(r.bestSellCity)})` : "—"}</td>
+              <td>${hasBuy ? `${formatExactInt(r.bestBuyOrder)} Ag (${escapeHtml(r.bestBuyCity)})` : "—"}</td>
+              <td>${hasSell && hasBuy ? `${formatExactInt(r.spreadSilver)} Ag (${r.spreadPercent.toFixed(1)}%)` : "—"}</td>
+              <td>
+                <span class="row-actions">
+                  <button class="btn btn-secondary btn-xs" type="button" data-craft-item="${escapeHtml(r.itemId)}" title="Pré-remplir le calculateur d'artisanat avec cet objet">⚒ Craft</button>
+                  ${isSession ? "" : `<button class="btn btn-danger btn-xs" type="button" data-untrack-item="${escapeHtml(r.itemId)}" title="Retirer des objets suivis">✕</button>`}
+                </span>
+              </td>
             </tr>
-          `,
-            )
+          `;
+            })
             .join("")}
         </tbody>
       </table>
     `;
   } catch (err) {
-    wrap.innerHTML = `<div class="empty-state">API hors-ligne ou indisponible (${escapeHtml(err.message)}).</div>`;
+    wrap.innerHTML = `<div class="empty-state">API hors-ligne ou indisponible (${escapeHtml(err.message || err)}).</div>`;
   }
+};
+
+const prefillCraftingFromItem = (itemId) => {
+  const row = lastPriceRows.find((r) => r.itemId === itemId);
+  if (!row) return;
+  const name = row.info?.nameFr || itemId;
+  el("craft-name").value = name;
+  const price = row.bestSellPrice > 0 ? row.bestSellPrice : row.bestBuyOrder;
+  if (price > 0) el("craft-sell").value = String(Math.round(price));
+  if (row.info?.itemValue > 0) el("craft-item-val").value = String(row.info.itemValue);
+  updateCraftingSimulation();
+  el("craft-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  showToast(`Calculateur pré-rempli : ${name}${price > 0 ? ` à ${formatExactInt(price)} Ag` : ""}`);
+};
+
+const addTrackedItem = async (item) => {
+  if (!item?.uniqueName) return;
+  itemInfoCache.set(item.uniqueName, item);
+  const next = [item.uniqueName, ...settings.trackedItems.filter((id) => id !== item.uniqueName)];
+  settings = normalizeSettings({ ...settings, trackedItems: next });
+  await persistSettings();
+  showToast(`${item.nameFr || item.uniqueName} ajouté aux objets suivis.`);
+  await fetchAlbionDataPrices();
+};
+
+const removeTrackedItem = async (itemId) => {
+  const remaining = settings.trackedItems.filter((id) => id !== itemId);
+  if (remaining.length === 0) {
+    showToast("Gardez au moins un objet suivi.");
+    return;
+  }
+  settings = normalizeSettings({ ...settings, trackedItems: remaining });
+  await persistSettings();
+  await fetchAlbionDataPrices();
+};
+
+const hideSearchResults = () => {
+  const box = el("market-search-results");
+  if (box) box.hidden = true;
+};
+
+const runMarketSearch = async (query) => {
+  const box = el("market-search-results");
+  if (!box) return;
+  const q = query.trim();
+  if (q.length < 2) {
+    hideSearchResults();
+    return;
+  }
+  const seq = ++searchSeq;
+  let results = [];
+  try {
+    results = (await invokeCmd("search_catalog_items", { query: q, limit: 12 })) || [];
+  } catch (e) {
+    console.warn("search_catalog_items:", e);
+  }
+  if (seq !== searchSeq) return;
+  if (results.length === 0) {
+    box.innerHTML = `<div class="search-result-empty">Aucun objet trouvé. Astuce : synchronisez la base complète via 📦 Base.</div>`;
+  } else {
+    for (const it of results) itemInfoCache.set(it.uniqueName, it);
+    box.innerHTML = results
+      .map(
+        (it) => `
+        <button class="search-result-item" type="button" data-add-item="${escapeHtml(it.uniqueName)}">
+          ${renderItemThumb(it.uniqueName, 32)}
+          <span class="search-result-meta">
+            <strong>${escapeHtml(it.nameFr || it.nameEn || it.uniqueName)}</strong>
+            <small>${escapeHtml(it.uniqueName)} • T${it.tier}.${it.enchantment}</small>
+          </span>
+        </button>
+      `,
+      )
+      .join("");
+  }
+  box.hidden = false;
 };
 
 const syncCatalogFromGitHub = async () => {
   const btn = el("btn-sync-catalog");
   if (btn) btn.disabled = true;
-  showToast("Téléchargement de la base d'objets et zones Albion (ao-bin-dumps)…");
+  showToast("Téléchargement de la base d'objets, zones et sorts Albion (ao-bin-dumps)…");
   try {
-    const [itemsResp, worldResp] = await Promise.all([
-      fetch("https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master/formatted/items.json"),
-      fetch("https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master/formatted/world.json").catch(() => null),
+    const base = "https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master";
+    const [itemsResp, worldResp, spellsResp] = await Promise.all([
+      fetch(`${base}/formatted/items.json`),
+      fetch(`${base}/formatted/world.json`).catch(() => null),
+      fetch(`${base}/spells.xml`).catch(() => null),
     ]);
     if (!itemsResp.ok) throw new Error(`HTTP ${itemsResp.status}`);
     const itemsText = await itemsResp.text();
     const worldText = worldResp && worldResp.ok ? await worldResp.text() : null;
+    const spellsText = spellsResp && spellsResp.ok ? await spellsResp.text() : null;
     const added = await invokeCmd("import_ao_bin_dumps", {
       jsonText: itemsText,
       worldJson: worldText,
+      spellsXml: spellsText,
     });
+    itemInfoCache.clear();
     await refreshState(true);
-    showToast(`Catalogue synchronisé et mis en cache (+${formatExactInt(added || 0)} entrées) !`);
+    const spellCount = latestState?.snapshot?.catalogSpellCount || 0;
+    showToast(
+      `Catalogue synchronisé et mis en cache (+${formatExactInt(added || 0)} entrées, ${formatExactInt(spellCount)} sorts) !`,
+    );
   } catch (err) {
     showToast(`Échec synchronisation ao-bin-dumps : ${err.message || err}`);
   } finally {
@@ -737,6 +935,8 @@ const computeStateSignature = (res) => {
     c?.mode || "",
     c?.needsElevation ? 1 : 0,
     s.catalogItemCount || 0,
+    s.catalogSpellCount || 0,
+    res?.clickThrough ? 1 : 0,
     s.snapshots?.length || 0,
     s.localPlayer?.inCombat ? Math.floor(s.combatSeconds || 0) : 0,
   ].join(":");
@@ -839,6 +1039,27 @@ const initEvents = () => {
     showToast(settings.alwaysOnTop ? "Fenêtre épinglée au-dessus du jeu" : "Épinglage désactivé");
   });
 
+  el("btn-click-through")?.addEventListener("click", async () => {
+    const next = !latestState?.clickThrough;
+    try {
+      await invokeCmd("set_click_through", { enabled: next });
+      await refreshState(true);
+      if (next) {
+        showToast("Souris traversante activée — Ctrl+Alt+L pour déverrouiller.");
+      }
+    } catch (err) {
+      showToast(`Mode souris traversante indisponible : ${err}`);
+    }
+  });
+
+  let opacityPersistTimer = null;
+  el("overlay-opacity")?.addEventListener("input", (ev) => {
+    settings.overlayOpacity = Math.max(35, Math.min(100, Math.round(Number(ev.target.value) || 96)));
+    applyOverlayOpacity();
+    if (opacityPersistTimer) clearTimeout(opacityPersistTimer);
+    opacityPersistTimer = setTimeout(() => persistSettings(), 400);
+  });
+
   el("btn-min")?.addEventListener("click", () => tauriWindow?.minimize?.());
   el("btn-close")?.addEventListener("click", () => tauriWindow?.close?.());
 
@@ -916,6 +1137,61 @@ const initEvents = () => {
   el("btn-fetch-prices")?.addEventListener("click", () => {
     fetchAlbionDataPrices();
   });
+
+  // Free-text market search over the (synced) catalog
+  const searchInput = el("market-search-input");
+  searchInput?.addEventListener("input", (ev) => {
+    if (searchTimer) clearTimeout(searchTimer);
+    const q = ev.target.value || "";
+    searchTimer = setTimeout(() => runMarketSearch(q), 220);
+  });
+  searchInput?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      hideSearchResults();
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      el("market-search-results")?.querySelector("[data-add-item]")?.click();
+    }
+  });
+  searchInput?.addEventListener("focus", () => {
+    if ((searchInput.value || "").trim().length >= 2) runMarketSearch(searchInput.value);
+  });
+  // Prevent the input from losing focus on mousedown; the click handler performs the selection.
+  el("market-search-results")?.addEventListener("mousedown", (ev) => {
+    if (ev.target.closest("[data-add-item]")) ev.preventDefault();
+  });
+  el("market-search-results")?.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-add-item]");
+    if (!btn) return;
+    const id = btn.getAttribute("data-add-item");
+    hideSearchResults();
+    if (searchInput) searchInput.value = "";
+    addTrackedItem(itemInfoCache.get(id) || { uniqueName: id });
+  });
+  document.addEventListener("click", (ev) => {
+    if (!ev.target.closest(".market-search-field")) hideSearchResults();
+  });
+
+  el("api-price-rows")?.addEventListener("click", (ev) => {
+    const craftBtn = ev.target.closest("[data-craft-item]");
+    if (craftBtn) {
+      prefillCraftingFromItem(craftBtn.getAttribute("data-craft-item"));
+      return;
+    }
+    const untrackBtn = ev.target.closest("[data-untrack-item]");
+    if (untrackBtn) {
+      removeTrackedItem(untrackBtn.getAttribute("data-untrack-item"));
+    }
+  });
+
+  el("btn-price-session")?.addEventListener("click", async () => {
+    const { items, qtyByItem } = collectSessionPriceableItems(latestState?.snapshot);
+    if (items.length === 0) {
+      showToast("Aucun butin ni récolte à valoriser pour cette session.");
+      return;
+    }
+    await fetchAlbionDataPrices(items, qtyByItem);
+  });
 };
 
 const boot = async () => {
@@ -937,6 +1213,11 @@ const boot = async () => {
   await applyWindowPreferences();
   await refreshState(true);
   await updateCraftingSimulation();
+
+  const priceWrap = el("api-price-rows");
+  if (priceWrap) {
+    priceWrap.innerHTML = `<div class="empty-state">${settings.trackedItems.length} objet(s) suivi(s). Cliquez sur <strong>🌐 Actualiser Prix API</strong> ou recherchez un objet pour l'ajouter.</div>`;
+  }
 
   setInterval(() => refreshState(false), settings.autoRefreshMs);
 };

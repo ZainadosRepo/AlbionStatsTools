@@ -1,8 +1,9 @@
 :root {
-  --bg-shell: rgba(13, 16, 23, 0.96);
-  --bg-card: #151a24;
-  --bg-card-elev: #1b2230;
-  --bg-input: #0f131b;
+  --shell-opacity: 0.96;
+  --bg-shell: rgba(13, 16, 23, var(--shell-opacity, 0.96));
+  --bg-card: rgba(21, 26, 36, var(--shell-opacity, 0.96));
+  --bg-card-elev: rgba(27, 34, 48, max(var(--shell-opacity, 0.96), 0.9));
+  --bg-input: rgba(15, 19, 27, var(--shell-opacity, 0.96));
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-accent: rgba(235, 179, 76, 0.45);
   --text-main: #f3f5f8;
@@ -62,7 +63,11 @@ body {
   gap: 10px;
   height: 40px;
   padding: 0 12px;
-  background: linear-gradient(90deg, #10141d 0%, #171d2a 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(16, 20, 29, var(--shell-opacity, 0.96)) 0%,
+    rgba(23, 29, 42, var(--shell-opacity, 0.96)) 100%
+  );
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
@@ -200,7 +205,7 @@ body {
   align-items: center;
   gap: 4px;
   padding: 6px 12px;
-  background: #111620;
+  background: rgba(17, 22, 32, var(--shell-opacity, 0.96));
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   overflow-x: auto;
@@ -770,4 +775,147 @@ input[type="number"] {
   align-items: center;
   gap: 5px;
   text-align: right;
+}
+
+/* Overlay opacity slider */
+.opacity-slider {
+  width: 64px;
+  height: 4px;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+
+/* Click-through (mouse pass-through) banner */
+.click-through-banner {
+  padding: 5px 12px;
+  background: rgba(168, 100, 247, 0.18);
+  border-bottom: 1px solid rgba(168, 100, 247, 0.4);
+  color: #d6bcfa;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.click-through-banner kbd {
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid rgba(214, 188, 250, 0.4);
+  background: rgba(0, 0, 0, 0.25);
+  font-family: inherit;
+  font-size: 10.5px;
+}
+
+.app-shell.click-through .titlebar-actions .tb-btn:not(#btn-click-through) {
+  opacity: 0.45;
+}
+
+/* Market search & tracked items */
+.market-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.market-search-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.market-search-field input {
+  width: 100%;
+  user-select: text;
+}
+
+.search-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 20;
+  background: var(--bg-card-elev);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
+}
+
+.search-result-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-main);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-result-item:last-child {
+  border-bottom: none;
+}
+
+.search-result-item:hover,
+.search-result-item:focus-visible {
+  background: var(--gold-soft);
+  outline: none;
+}
+
+.search-result-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.search-result-meta small {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-result-empty {
+  padding: 8px 10px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.valuation-banner {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--gold-soft);
+  border: 1px solid var(--border-accent);
+  color: var(--gold);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.valuation-banner strong {
+  color: #fff;
+  font-size: 13px;
+}
+
+.btn-xs {
+  padding: 2px 7px;
+  font-size: 10.5px;
+}
+
+.row-actions {
+  display: inline-flex;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.item-id-sub {
+  display: block;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 400;
 }

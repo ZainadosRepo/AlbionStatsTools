@@ -14,14 +14,24 @@ export const DEFAULT_CITIES = [
   "Brecilien",
 ];
 
+export const DEFAULT_TRACKED_ITEMS = [
+  "T7_2H_CLEAVER_HELL@1",
+  "T8_MAIN_HOLYSTAFF_AVALON@2",
+  "T8_2H_BOW_AVALON@2",
+  "T8_2H_INFERNOSTAFF_MORGANA@2",
+  "T8_BAG_INSIGHT",
+];
+
 export const DEFAULT_SETTINGS = Object.freeze({
   region: "europe",
   meterMode: "damage",
   copyStyle: "compact",
   alwaysOnTop: false,
   compactOverlay: false,
+  overlayOpacity: 96,
   autoRefreshMs: 1000,
   selectedCities: [...DEFAULT_CITIES],
+  trackedItems: [...DEFAULT_TRACKED_ITEMS],
 });
 
 export const normalizeSettings = (raw) => {
@@ -29,6 +39,7 @@ export const normalizeSettings = (raw) => {
     return {
       ...DEFAULT_SETTINGS,
       selectedCities: [...DEFAULT_CITIES],
+      trackedItems: [...DEFAULT_TRACKED_ITEMS],
     };
   }
 
@@ -44,7 +55,12 @@ export const normalizeSettings = (raw) => {
   const alwaysOnTop = Boolean(raw.alwaysOnTop);
   const compactOverlay = Boolean(raw.compactOverlay);
 
-  const parsedRefresh = Number(raw.autoRefreshMs);
+  const parsedOpacity = raw.overlayOpacity != null ? Number(raw.overlayOpacity) : NaN;
+  const overlayOpacity = Number.isFinite(parsedOpacity)
+    ? Math.max(35, Math.min(100, Math.round(parsedOpacity)))
+    : DEFAULT_SETTINGS.overlayOpacity;
+
+  const parsedRefresh = raw.autoRefreshMs != null ? Number(raw.autoRefreshMs) : NaN;
   const autoRefreshMs = Number.isFinite(parsedRefresh)
     ? Math.max(500, Math.min(5000, Math.round(parsedRefresh)))
     : DEFAULT_SETTINGS.autoRefreshMs;
@@ -55,13 +71,24 @@ export const normalizeSettings = (raw) => {
         .filter((c, i, arr) => arr.indexOf(c) === i)
     : [...DEFAULT_CITIES];
 
+  const trackedItems = Array.isArray(raw.trackedItems)
+    ? raw.trackedItems
+        .filter((it) => typeof it === "string")
+        .map((it) => it.trim().toUpperCase())
+        .filter((it) => it.length > 0 && /^[A-Z0-9_@]+$/.test(it))
+        .filter((it, i, arr) => arr.indexOf(it) === i)
+        .slice(0, 40)
+    : [...DEFAULT_TRACKED_ITEMS];
+
   return {
     region,
     meterMode,
     copyStyle,
     alwaysOnTop,
     compactOverlay,
+    overlayOpacity,
     autoRefreshMs,
     selectedCities: selectedCities.length > 0 ? selectedCities : [...DEFAULT_CITIES],
+    trackedItems: trackedItems.length > 0 ? trackedItems : [...DEFAULT_TRACKED_ITEMS],
   };
 };

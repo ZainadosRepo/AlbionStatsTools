@@ -135,6 +135,49 @@ impl Catalog {
         list
     }
 
+    /// Searches catalog items by French name, English name, or `UniqueName` (multi-token, case-insensitive).
+    pub fn search_items(&self, query: &str, limit: usize) -> Vec<&ItemEntry> {
+        let cap = limit.clamp(1, 100);
+        let trimmed = query.trim().to_lowercase();
+        if trimmed.is_empty() {
+            return self.all_items().into_iter().take(cap).collect();
+        }
+        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+        let mut scored: Vec<(i32, i32, &ItemEntry)> = Vec::new();
+
+        for item in self.items_by_index.values() {
+            let u_low = item.unique_name.to_lowercase();
+            let fr_low = item.name_fr.to_lowercase();
+            let en_low = item.name_en.to_lowercase();
+
+            let all_match = tokens
+                .iter()
+                .all(|tok| fr_low.contains(tok) || en_low.contains(tok) || u_low.contains(tok));
+            if !all_match {
+                continue;
+            }
+
+            let score = if u_low == trimmed || fr_low == trimmed || en_low == trimmed {
+                0
+            } else if fr_low.starts_with(&trimmed)
+                || en_low.starts_with(&trimmed)
+                || u_low.starts_with(&trimmed)
+            {
+                1
+            } else {
+                2
+            };
+            scored.push((score, -(item.tier as i32), item));
+        }
+
+        scored.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.index.cmp(&b.2.index))
+        });
+        scored.into_iter().take(cap).map(|(_, _, it)| it).collect()
+    }
+
     pub fn spell(&self, index: i32) -> Option<&SpellEntry> {
         if index <= 0 {
             return self.spells_by_index.get(&0);
@@ -165,7 +208,7 @@ impl Catalog {
         self.clusters_by_index.len()
     }
 
-    /// Exports the full catalog (including merged `ao-bin-dumps` items and clusters) for disk caching.
+    /// Exports the full catalog (including merged `ao-bin-dumps` items, spells, and clusters) for disk caching.
     pub fn export_raw(&self) -> RawCatalog {
         let mut items: Vec<ItemEntry> = self.items_by_index.values().cloned().collect();
         items.sort_by_key(|i| i.index);
@@ -256,6 +299,174 @@ impl Catalog {
         }
         Ok(added)
     }
+
+    /// Merges spells from `ao-bin-dumps/spells.xml` in exact document index order
+    /// (`passivespell`, `activespell` + nested `<channelingspell>`, `togglespell`).
+    pub fn merge_ao_bin_dumps_spells_xml(&mut self, xml_text: &str) -> Result<usize, String> {
+        let clean = strip_xml_comments(xml_text);
+        if !clean.contains("<spells") {
+            return Err("Format spells.xml invalide (balise <spells> absente)".into());
+        }
+
+        let mut added = 0usize;
+        let mut spell_index: i32 = 0;
+        let bytes = clean.as_bytes();
+        let mut pos = 0usize;
+
+        while let Some(rel_lt) = clean[pos..].find('<') {
+            let tag_start = pos + rel_lt;
+            let rest = &clean[tag_start + 1..];
+
+            let matched_tag = if rest.starts_with("passivespell")
+                && rest
+                    .as_bytes()
+                    .get(12)
+                    .is_some_and(|b| b.is_ascii_whitespace())
+            {
+                Some(("passivespell", 12usize))
+            } else if rest.starts_with("activespell")
+                && rest
+                    .as_bytes()
+                    .get(11)
+                    .is_some_and(|b| b.is_ascii_whitespace())
+            {
+                Some(("activespell", 11usize))
+            } else if rest.starts_with("togglespell")
+                && rest
+                    .as_bytes()
+                    .get(11)
+                    .is_some_and(|b| b.is_ascii_whitespace())
+            {
+                Some(("togglespell", 11usize))
+            } else {
+                None
+            };
+
+            let Some((tag_name, tag_len)) = matched_tag else {
+                pos = tag_start + 1;
+                if pos >= bytes.len() {
+                    break;
+                }
+                continue;
+            };
+
+            let Some(rel_gt) = rest.find('>') else {
+                break;
+            };
+            let open_tag_slice = &rest[tag_len..rel_gt];
+            let self_closing = open_tag_slice.trim_end().ends_with('/');
+
+            let unique_name = extract_xml_attr(open_tag_slice, "uniquename").unwrap_or_default();
+            let raw_cat = extract_xml_attr(open_tag_slice, "category")
+                .or_else(|| extract_xml_attr(open_tag_slice, "uitype"))
+                .unwrap_or_else(|| "damage".into());
+
+            let cur_idx = spell_index;
+            spell_index += 1;
+
+            if !unique_name.is_empty() && !self.spells_by_index.contains_key(&cur_idx) {
+                let readable = humanize_spell_identifier(&unique_name);
+                self.spells_by_index.insert(
+                    cur_idx,
+                    SpellEntry {
+                        index: cur_idx,
+                        unique_name: unique_name.clone(),
+                        name_fr: readable.clone(),
+                        name_en: readable,
+                        category: normalize_spell_category(&raw_cat),
+                    },
+                );
+                added += 1;
+            }
+
+            let after_open = tag_start + 1 + rel_gt + 1;
+            if self_closing {
+                pos = after_open;
+                continue;
+            }
+
+            let close_pat = format!("</{tag_name}>");
+            if let Some(rel_close) = clean[after_open..].find(&close_pat) {
+                let inner = &clean[after_open..after_open + rel_close];
+                if tag_name == "activespell" && inner.contains("<channelingspell") {
+                    let chan_idx = spell_index;
+                    spell_index += 1;
+                    if !unique_name.is_empty() && !self.spells_by_index.contains_key(&chan_idx) {
+                        let readable = humanize_spell_identifier(&unique_name);
+                        self.spells_by_index.insert(
+                            chan_idx,
+                            SpellEntry {
+                                index: chan_idx,
+                                unique_name: unique_name.clone(),
+                                name_fr: format!("{readable} (Canal.)"),
+                                name_en: format!("{readable} (Channel)"),
+                                category: normalize_spell_category(&raw_cat),
+                            },
+                        );
+                        added += 1;
+                    }
+                }
+                pos = after_open + rel_close + close_pat.len();
+            } else {
+                pos = after_open;
+            }
+        }
+
+        Ok(added)
+    }
+}
+
+fn strip_xml_comments(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        if let Some(end) = rest[start + 4..].find("-->") {
+            rest = &rest[start + 4 + end + 3..];
+        } else {
+            return out;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn extract_xml_attr(attrs: &str, name: &str) -> Option<String> {
+    let needle = format!("{name}=\"");
+    let start = attrs.find(&needle)? + needle.len();
+    let end = attrs[start..].find('"')?;
+    Some(attrs[start..start + end].trim().to_string())
+}
+
+fn humanize_spell_identifier(unique_name: &str) -> String {
+    unique_name
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut word = String::new();
+                    word.extend(first.to_uppercase());
+                    word.push_str(&chars.as_str().to_lowercase());
+                    word
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_spell_category(raw: &str) -> String {
+    let low = raw.to_ascii_lowercase();
+    if low.contains("heal") {
+        "heal".into()
+    } else if low.contains("buff") || low.contains("defens") || low.contains("mobility") {
+        "buff".into()
+    } else {
+        "damage".into()
+    }
 }
 
 fn parse_tier_and_enchant(unique_name: &str) -> (u8, u8) {
@@ -330,7 +541,22 @@ mod tests {
     }
 
     #[test]
-    fn merges_ao_bin_dumps_formatted_items() {
+    fn searches_items_by_french_english_and_unique_name() {
+        let catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let by_fr = catalog.search_items("lames sculptées", 10);
+        assert!(!by_fr.is_empty());
+        assert_eq!(by_fr[0].unique_name, "T7_2H_CLEAVER_HELL@1");
+
+        let by_en = catalog.search_items("hallowfall", 10);
+        assert!(!by_en.is_empty());
+        assert_eq!(by_en[0].unique_name, "T8_MAIN_HOLYSTAFF_AVALON@2");
+
+        let by_id = catalog.search_items("T8_BAG_INSIGHT", 5);
+        assert_eq!(by_id[0].unique_name, "T8_BAG_INSIGHT");
+    }
+
+    #[test]
+    fn merges_ao_bin_dumps_formatted_items_world_and_spells_xml() {
         let mut catalog = Catalog::from_json_str(EMBEDDED).unwrap();
         let sample = r#"[
             {
@@ -357,9 +583,29 @@ mod tests {
         let cluster = catalog.cluster("MISTS_999").unwrap();
         assert_eq!(cluster.kind, "mists");
 
+        // Index 0 already exists (AUTO_ATTACK), so index 1..=3 should be added including channeling slot
+        let spells_xml = r#"<spells>
+            <!-- <activespell uniquename="COMMENTED_OUT" /> -->
+            <colortag tag="[dmg]" />
+            <passivespell uniquename="PASSIVE_MAXLOAD" />
+            <activespell uniquename="FLAME_PILLAR" category="damage">
+                <channelingspell effectcount="3" />
+            </activespell>
+            <togglespell uniquename="TOGGLE_AURA" category="heal" />
+        </spells>"#;
+        let spells_added = catalog.merge_ao_bin_dumps_spells_xml(spells_xml).unwrap();
+        assert_eq!(spells_added, 3);
+        assert_eq!(catalog.spell(0).unwrap().unique_name, "AUTO_ATTACK");
+        assert_eq!(catalog.spell(1).unwrap().unique_name, "FLAME_PILLAR");
+        assert_eq!(catalog.spell(1).unwrap().name_fr, "Flame Pillar");
+        assert_eq!(catalog.spell(2).unwrap().name_fr, "Flame Pillar (Canal.)");
+        assert_eq!(catalog.spell(3).unwrap().unique_name, "TOGGLE_AURA");
+        assert_eq!(catalog.spell(3).unwrap().category, "heal");
+
         let exported = catalog.export_raw();
         let reloaded = Catalog::from_raw(exported);
         assert_eq!(reloaded.item_count(), catalog.item_count());
+        assert_eq!(reloaded.spell_count(), catalog.spell_count());
         assert_eq!(reloaded.cluster_count(), catalog.cluster_count());
     }
 }

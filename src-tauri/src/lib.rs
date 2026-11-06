@@ -6,16 +6,20 @@ use albion_core::catalog::{Catalog, ItemEntry};
 use albion_core::crafting::{simulate_crafting, CraftingSimulationInput, CraftingSimulationResult};
 use albion_core::engine::{AnalyzerEngine, AppSnapshot, MeterSnapshot};
 use capture::{now_unix_ms, start_background_capture, CaptureStatus};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use serde::Serialize;
 use std::sync::{Arc, Mutex, OnceLock};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 const CATALOG_JSON: &str = include_str!("../../data/catalog.json");
+const LIVE_HISTORY_FLUSH_INTERVAL_MS: u64 = 10_000;
 
 struct AppState {
     engine: Arc<Mutex<AnalyzerEngine>>,
     capture_status: Arc<Mutex<CaptureStatus>>,
+    click_through: AtomicBool,
+    last_history_flush_ms: AtomicU64,
     shortcut_error: OnceLock<String>,
 }
 
@@ -24,17 +28,35 @@ struct AppState {
 struct FullStatusResponse {
     snapshot: AppSnapshot,
     capture: CaptureStatus,
+    click_through: bool,
     shortcut_error: Option<String>,
 }
 
 #[tauri::command]
-fn get_state(state: tauri::State<AppState>) -> Result<FullStatusResponse, String> {
+fn get_state(app: AppHandle, state: tauri::State<AppState>) -> Result<FullStatusResponse, String> {
     let now = now_unix_ms();
-    let snapshot = state
-        .engine
-        .lock()
-        .map_err(|_| "verrou moteur indisponible".to_string())?
-        .snapshot(now);
+    let mut history_to_flush = None;
+    let snapshot = {
+        let mut eng = state
+            .engine
+            .lock()
+            .map_err(|_| "verrou moteur indisponible".to_string())?;
+        let last_flush = state.last_history_flush_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(last_flush) >= LIVE_HISTORY_FLUSH_INTERVAL_MS
+            && eng.take_dirty_history()
+        {
+            state.last_history_flush_ms.store(now, Ordering::Relaxed);
+            history_to_flush = serde_json::to_value(eng.export_history()).ok();
+        }
+        eng.snapshot(now)
+    };
+
+    if let Some(val) = history_to_flush {
+        if let Ok(path) = history_path(&app) {
+            let _ = settings::save(&path, &val);
+        }
+    }
+
     let capture = state
         .capture_status
         .lock()
@@ -43,6 +65,7 @@ fn get_state(state: tauri::State<AppState>) -> Result<FullStatusResponse, String
     Ok(FullStatusResponse {
         snapshot,
         capture,
+        click_through: state.click_through.load(Ordering::Relaxed),
         shortcut_error: state.shortcut_error.get().cloned(),
     })
 }
@@ -59,13 +82,17 @@ fn simulate_session(
             .lock()
             .map_err(|_| "verrou moteur indisponible".to_string())?;
         eng.run_wire_simulation_scenario(now);
+        let _ = eng.take_dirty_history();
         persist_history_best_effort(&app, &eng);
     }
-    get_state(state)
+    get_state(app, state)
 }
 
 #[tauri::command]
-fn reset_meter(state: tauri::State<AppState>) -> Result<FullStatusResponse, String> {
+fn reset_meter(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<FullStatusResponse, String> {
     {
         let mut eng = state
             .engine
@@ -73,7 +100,7 @@ fn reset_meter(state: tauri::State<AppState>) -> Result<FullStatusResponse, Stri
             .map_err(|_| "verrou moteur indisponible".to_string())?;
         eng.reset_meter();
     }
-    get_state(state)
+    get_state(app, state)
 }
 
 #[tauri::command]
@@ -90,7 +117,7 @@ fn reset_session(
         eng.reset_session(now);
         persist_history_best_effort(&app, &eng);
     }
-    get_state(state)
+    get_state(app, state)
 }
 
 #[tauri::command]
@@ -106,6 +133,7 @@ fn take_snapshot(
         .map_err(|_| "verrou moteur indisponible".to_string())?;
     let snap = eng.take_snapshot(label, now);
     if snap.is_some() {
+        let _ = eng.take_dirty_history();
         persist_history_best_effort(&app, &eng);
     }
     Ok(snap)
@@ -123,6 +151,7 @@ fn delete_snapshot(
         .map_err(|_| "verrou moteur indisponible".to_string())?;
     let deleted = eng.delete_snapshot(&id);
     if deleted {
+        let _ = eng.take_dirty_history();
         persist_history_best_effort(&app, &eng);
     }
     Ok(deleted)
@@ -152,11 +181,30 @@ fn list_catalog_items(state: tauri::State<AppState>) -> Result<Vec<ItemEntry>, S
 }
 
 #[tauri::command]
+fn search_catalog_items(
+    state: tauri::State<AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<ItemEntry>, String> {
+    let eng = state
+        .engine
+        .lock()
+        .map_err(|_| "verrou moteur indisponible".to_string())?;
+    Ok(eng
+        .catalog
+        .search_items(&query, limit.unwrap_or(20))
+        .into_iter()
+        .cloned()
+        .collect())
+}
+
+#[tauri::command]
 fn import_ao_bin_dumps(
     app: AppHandle,
     state: tauri::State<AppState>,
     json_text: String,
     world_json: Option<String>,
+    spells_xml: Option<String>,
 ) -> Result<usize, String> {
     let mut eng = state
         .engine
@@ -168,12 +216,41 @@ fn import_ao_bin_dumps(
             added += eng.catalog.merge_ao_bin_dumps_world(&w_json).unwrap_or(0);
         }
     }
+    if let Some(s_xml) = spells_xml {
+        if !s_xml.trim().is_empty() {
+            let res = eng.catalog.merge_ao_bin_dumps_spells_xml(&s_xml);
+            added += res.unwrap_or(0);
+        }
+    }
     if let Ok(path) = catalog_cache_path(&app) {
         if let Ok(raw_val) = serde_json::to_value(eng.catalog.export_raw()) {
             let _ = settings::save(&path, &raw_val);
         }
     }
     Ok(added)
+}
+
+fn apply_click_through(app: &AppHandle, state: &AppState, enabled: bool) -> Result<bool, String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Err("Fenêtre principale introuvable".into());
+    };
+    window
+        .set_ignore_cursor_events(enabled)
+        .map_err(|e| e.to_string())?;
+    if enabled {
+        let _ = window.set_always_on_top(true);
+    }
+    state.click_through.store(enabled, Ordering::Relaxed);
+    Ok(enabled)
+}
+
+#[tauri::command]
+fn set_click_through(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+    enabled: bool,
+) -> Result<bool, String> {
+    apply_click_through(&app, &state, enabled)
 }
 
 #[tauri::command]
@@ -237,15 +314,26 @@ fn toggle_main_window(app: &AppHandle) {
     }
 }
 
+/// Ctrl + Alt + L: toggle click-through mode so mouse clicks pass directly to Albion Online.
+fn toggle_click_through_shortcut(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let next = !state.click_through.load(Ordering::Relaxed);
+    if let Err(e) = apply_click_through(app, &state, next) {
+        eprintln!("Ctrl+Alt+L: {e}");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let now = now_unix_ms();
     let catalog =
         Catalog::from_json_str(CATALOG_JSON).expect("embedded data/catalog.json is valid");
-    let engine = Arc::new(Mutex::new(AnalyzerEngine::new(catalog, now_unix_ms())));
+    let engine = Arc::new(Mutex::new(AnalyzerEngine::new(catalog, now)));
     let capture_status = Arc::new(Mutex::new(CaptureStatus::default()));
     start_background_capture(Arc::clone(&engine), Arc::clone(&capture_status));
 
-    let toggle = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM);
+    let toggle_vis = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM);
+    let toggle_lock = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -253,8 +341,13 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    if shortcut == &toggle && event.state() == ShortcutState::Pressed {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if shortcut == &toggle_vis {
                         toggle_main_window(app);
+                    } else if shortcut == &toggle_lock {
+                        toggle_click_through_shortcut(app);
                     }
                 })
                 .build(),
@@ -262,7 +355,19 @@ pub fn run() {
         .manage(AppState {
             engine,
             capture_status,
+            click_through: AtomicBool::new(false),
+            last_history_flush_ms: AtomicU64::new(now),
             shortcut_error: OnceLock::new(),
+        })
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
+                let app = window.app_handle();
+                if let Ok(mut eng) = app.state::<AppState>().engine.lock() {
+                    let _ = eng.take_dirty_history();
+                    persist_history_best_effort(app, &eng);
+                }
+            }
+            _ => {}
         })
         .setup(move |app| {
             let handle = app.handle();
@@ -271,7 +376,9 @@ pub fn run() {
                 if let Ok(cat_path) = catalog_cache_path(handle) {
                     if let Ok(text) = std::fs::read_to_string(&cat_path) {
                         if let Ok(cached_cat) = Catalog::from_json_str(&text) {
-                            if cached_cat.item_count() >= eng.catalog.item_count() {
+                            if cached_cat.item_count() >= eng.catalog.item_count()
+                                || cached_cat.spell_count() > eng.catalog.spell_count()
+                            {
                                 eng.catalog = cached_cat;
                             }
                         }
@@ -285,8 +392,10 @@ pub fn run() {
                     }
                 }
             }
-            if let Err(e) = app.global_shortcut().register(toggle) {
-                let _ = app.state::<AppState>().shortcut_error.set(e.to_string());
+            for sc in [toggle_vis, toggle_lock] {
+                if let Err(e) = app.global_shortcut().register(sc) {
+                    let _ = app.state::<AppState>().shortcut_error.set(e.to_string());
+                }
             }
             update::check_in_background(app.handle().clone());
             Ok(())
@@ -301,7 +410,9 @@ pub fn run() {
             calculate_crafting,
             export_loot_csv,
             list_catalog_items,
+            search_catalog_items,
             import_ao_bin_dumps,
+            set_click_through,
             relaunch_as_admin,
             load_settings,
             save_settings

@@ -1,8 +1,12 @@
-//! Passive Photon UDP network capture on port `5056` (`SIO_RCVALL` raw socket on Windows +
-//! local loopback relay listener on `127.0.0.1:50560`).
+//! Passive Photon UDP network capture on port `5056`:
+//! - Windows: multi-interface `SIO_RCVALL` raw socket supervisor (auto-attaches VPN & LAN adapters)
+//! - macOS: passive BPF capture via `/usr/sbin/tcpdump` when `/dev/bpf*` access is available
+//! - All platforms: local loopback relay listener on `127.0.0.1:50560` + built-in wire simulator.
 
 use albion_core::engine::AnalyzerEngine;
-use albion_core::photon::{extract_udp_from_ip_packet, is_photon_port, looks_like_photon};
+use albion_core::photon::{
+    extract_udp_from_ip_packet, is_photon_port, looks_like_photon, UdpDatagramSlice,
+};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
@@ -37,14 +41,82 @@ pub fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Discovers the primary outbound IPv4 address used to reach Albion Online servers.
-pub fn detect_outbound_ipv4() -> Option<Ipv4Addr> {
-    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
-    sock.connect("193.169.238.1:5056").ok()?;
-    match sock.local_addr().ok()?.ip() {
-        IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_unspecified() => Some(ip),
-        _ => None,
+/// Discovers all candidate outbound IPv4 addresses used to reach Albion Online servers
+/// (Europe, Americas, Asia) as well as the default WAN gateway, supporting split-tunnel VPNs.
+#[cfg(any(target_os = "windows", test))]
+pub fn detect_candidate_ipv4s() -> Vec<Ipv4Addr> {
+    const ROUTE_PROBES: [&str; 4] = [
+        "193.169.238.1:5056",
+        "5.45.187.1:5056",
+        "5.188.125.1:5056",
+        "1.1.1.1:53",
+    ];
+    let mut out = Vec::new();
+    for target in ROUTE_PROBES {
+        let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else {
+            continue;
+        };
+        if sock.connect(target).is_err() {
+            continue;
+        }
+        if let Ok(addr) = sock.local_addr() {
+            if let IpAddr::V4(ip) = addr.ip() {
+                if !ip.is_loopback() && !ip.is_unspecified() && !out.contains(&ip) {
+                    out.push(ip);
+                }
+            }
+        }
     }
+    out
+}
+
+/// Parses a single `tcpdump -xx` hex line (`"  0x0000:  4500 0024 ..."`), appending raw bytes.
+#[cfg(any(target_os = "macos", test))]
+pub fn parse_tcpdump_hex_line(line: &str, out: &mut Vec<u8>) -> bool {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("0x") {
+        return false;
+    }
+    let Some((_, hex_part)) = trimmed.split_once(':') else {
+        return false;
+    };
+    for token in hex_part.split_whitespace() {
+        if token.len() == 4 && token.bytes().all(|b| b.is_ascii_hexdigit()) {
+            if let (Ok(hi), Ok(lo)) = (
+                u8::from_str_radix(&token[0..2], 16),
+                u8::from_str_radix(&token[2..4], 16),
+            ) {
+                out.push(hi);
+                out.push(lo);
+            }
+        } else if token.len() == 2 && token.bytes().all(|b| b.is_ascii_hexdigit()) {
+            if let Ok(b) = u8::from_str_radix(token, 16) {
+                out.push(b);
+            }
+        } else {
+            break;
+        }
+    }
+    true
+}
+
+/// Scans a link-layer frame (Ethernet / BSD loopback / PKTAP) for an IPv4/IPv6 Photon UDP packet.
+#[cfg(any(target_os = "macos", test))]
+pub fn find_ipv4_udp_in_frame(frame: &[u8]) -> Option<UdpDatagramSlice<'_>> {
+    let max_offset = frame.len().min(64);
+    for offset in 0..max_offset {
+        let candidate = &frame[offset..];
+        let Some(udp) = extract_udp_from_ip_packet(candidate) else {
+            continue;
+        };
+        if is_photon_port(udp.src_port)
+            || is_photon_port(udp.dst_port)
+            || looks_like_photon(udp.payload)
+        {
+            return Some(udp);
+        }
+    }
+    None
 }
 
 /// Relaunches the current executable on Windows via UAC (`ShellExecuteW` with `"runas"`).
@@ -123,16 +195,25 @@ pub fn start_background_capture(
         })
         .ok();
 
-    // 2. Windows raw socket (`SIO_RCVALL`) passive listener on port 5056
+    // 2. Windows multi-interface raw socket (`SIO_RCVALL`) supervisor
     #[cfg(target_os = "windows")]
     {
         std::thread::Builder::new()
-            .name("photon-raw-capture".into())
-            .spawn(move || windows_raw_capture_loop(engine, status))
+            .name("photon-raw-supervisor".into())
+            .spawn(move || windows_capture_supervisor(engine, status))
             .ok();
     }
 
-    #[cfg(not(target_os = "windows"))]
+    // 3. macOS passive BPF capture via `/usr/sbin/tcpdump` (falls back cleanly to standby)
+    #[cfg(target_os = "macos")]
+    {
+        std::thread::Builder::new()
+            .name("photon-macos-bpf".into())
+            .spawn(move || macos_bpf_capture_loop(engine, status))
+            .ok();
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         if let Ok(mut st) = status.lock() {
             st.mode = "standby".into();
@@ -144,8 +225,138 @@ pub fn start_background_capture(
     }
 }
 
+#[cfg(target_os = "macos")]
+fn macos_bpf_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mutex<CaptureStatus>>) {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    if let Ok(mut st) = status.lock() {
+        st.mode = "standby".into();
+        st.bind_address = "127.0.0.1:50560".into();
+        st.detail =
+            "Mode veille macOS (relais UDP 127.0.0.1:50560 + vérification BPF port 5056…)".into();
+        st.needs_elevation = false;
+    }
+
+    let Ok(mut child) = Command::new("/usr/sbin/tcpdump")
+        .args([
+            "-i",
+            "any",
+            "-n",
+            "-l",
+            "-q",
+            "-xx",
+            "-s",
+            "0",
+            "udp and (port 5056 or port 5055 or port 4535)",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        return;
+    };
+
+    let reader = BufReader::new(stdout);
+    let mut frame = Vec::with_capacity(2048);
+    let mut promoted_live = false;
+
+    for line in reader.lines().map_while(Result::ok) {
+        if !promoted_live {
+            promoted_live = true;
+            if let Ok(mut st) = status.lock() {
+                st.mode = "rawSocket".into();
+                st.bind_address = "any:5056".into();
+                st.detail = "Capture passive macOS BPF active (UDP 5056/5055/4535)".into();
+            }
+        }
+        if parse_tcpdump_hex_line(&line, &mut frame) {
+            continue;
+        }
+        if !frame.is_empty() {
+            if let Some(udp) = find_ipv4_udp_in_frame(&frame) {
+                if let Ok(mut st) = status.lock() {
+                    st.raw_datagrams_seen += 1;
+                }
+                if let Ok(mut eng) = engine.lock() {
+                    eng.ingest_udp_payload(udp.payload, now_unix_ms());
+                }
+            }
+            frame.clear();
+        }
+    }
+
+    let _ = child.wait();
+    if let Ok(mut st) = status.lock() {
+        st.mode = "standby".into();
+        st.bind_address = "127.0.0.1:50560".into();
+        st.detail = "Mode veille macOS (relais UDP 127.0.0.1:50560 + simulateur — installez ChmodBPF pour la capture directe)".into();
+    }
+}
+
 #[cfg(target_os = "windows")]
-fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mutex<CaptureStatus>>) {
+fn windows_capture_supervisor(
+    engine: Arc<Mutex<AnalyzerEngine>>,
+    status: Arc<Mutex<CaptureStatus>>,
+) {
+    use std::collections::HashSet;
+    use std::time::Duration;
+
+    let active_ips: Arc<Mutex<HashSet<Ipv4Addr>>> = Arc::new(Mutex::new(HashSet::new()));
+
+    loop {
+        let candidates = detect_candidate_ipv4s();
+        if candidates.is_empty() {
+            if let Ok(active) = active_ips.lock() {
+                if active.is_empty() {
+                    if let Ok(mut st) = status.lock() {
+                        st.mode = "standby".into();
+                        st.bind_address = "127.0.0.1:50560".into();
+                        st.detail =
+                            "Aucune interface IPv4 active détectée — simulateur prêt".into();
+                        st.needs_elevation = false;
+                    }
+                }
+            }
+        }
+
+        for ip in candidates {
+            let should_spawn = if let Ok(mut active) = active_ips.lock() {
+                active.insert(ip)
+            } else {
+                false
+            };
+            if should_spawn {
+                let eng_clone = Arc::clone(&engine);
+                let st_clone = Arc::clone(&status);
+                let active_clone = Arc::clone(&active_ips);
+                std::thread::Builder::new()
+                    .name(format!("photon-raw-{ip}"))
+                    .spawn(move || {
+                        windows_raw_interface_loop(ip, eng_clone, st_clone);
+                        if let Ok(mut active) = active_clone.lock() {
+                            active.remove(&ip);
+                        }
+                    })
+                    .ok();
+            }
+        }
+
+        std::thread::sleep(Duration::from_secs(8));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_raw_interface_loop(
+    local_ip: Ipv4Addr,
+    engine: Arc<Mutex<AnalyzerEngine>>,
+    status: Arc<Mutex<CaptureStatus>>,
+) {
     #[repr(C)]
     struct SockAddrIn {
         sin_family: u16,
@@ -183,17 +394,6 @@ fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mute
     const RCVALL_ON: u32 = 1;
     const INVALID_SOCKET: usize = usize::MAX;
 
-    let Some(local_ip) = detect_outbound_ipv4() else {
-        if let Ok(mut st) = status.lock() {
-            st.mode = "standby".into();
-            st.bind_address = "127.0.0.1:50560".into();
-            st.detail = "Aucune interface IPv4 active détectée — simulateur prêt".into();
-            st.needs_elevation = false;
-        }
-        return;
-    };
-
-    // Ensure Winsock is initialized by binding a transient std UdpSocket
     let _winsock_guard = UdpSocket::bind("127.0.0.1:0");
 
     // SAFETY: Standard Winsock2 calls with valid stack buffers and bounds-checked lengths.
@@ -202,12 +402,14 @@ fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mute
         if raw_sock == INVALID_SOCKET {
             let code = WSAGetLastError();
             if let Ok(mut st) = status.lock() {
-                st.mode = "standby".into();
-                st.bind_address = format!("{local_ip}:5056");
-                st.detail = format!(
-                    "Mode standard non-administrateur (code Winsock {code}) — cliquez sur « Activer Capture Admin » ou utilisez le simulateur"
-                );
-                st.needs_elevation = true;
+                if st.mode != "rawSocket" {
+                    st.mode = "standby".into();
+                    st.bind_address = format!("{local_ip}:5056");
+                    st.detail = format!(
+                        "Mode standard non-administrateur (code Winsock {code}) — cliquez sur « Activer Capture Admin »"
+                    );
+                    st.needs_elevation = true;
+                }
             }
             return;
         }
@@ -228,10 +430,12 @@ fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mute
             let code = WSAGetLastError();
             closesocket(raw_sock);
             if let Ok(mut st) = status.lock() {
-                st.mode = "standby".into();
-                st.bind_address = format!("{local_ip}:5056");
-                st.detail = format!("Bind raw socket refusé (code {code}) — mode veille actif");
-                st.needs_elevation = true;
+                if st.mode != "rawSocket" {
+                    st.mode = "standby".into();
+                    st.bind_address = format!("{local_ip}:5056");
+                    st.detail = format!("Bind raw socket refusé (code {code}) — mode veille actif");
+                    st.needs_elevation = true;
+                }
             }
             return;
         }
@@ -264,12 +468,14 @@ fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mute
             let code = WSAGetLastError();
             closesocket(raw_sock);
             if let Ok(mut st) = status.lock() {
-                st.mode = "standby".into();
-                st.bind_address = format!("{local_ip}:5056");
-                st.detail = format!(
-                    "SIO_RCVALL requiert les droits Administrateur (code {code}) — cliquez sur « Activer Capture Admin »"
-                );
-                st.needs_elevation = true;
+                if st.mode != "rawSocket" {
+                    st.mode = "standby".into();
+                    st.bind_address = format!("{local_ip}:5056");
+                    st.detail = format!(
+                        "SIO_RCVALL requiert les droits Administrateur (code {code}) — cliquez sur « Activer Capture Admin »"
+                    );
+                    st.needs_elevation = true;
+                }
             }
             return;
         }
@@ -277,8 +483,9 @@ fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mute
         if let Ok(mut st) = status.lock() {
             st.mode = "rawSocket".into();
             st.bind_address = format!("{local_ip}:5056");
-            st.detail =
-                format!("Capture directe Photon active sur {local_ip} (UDP 5056/5055/4535)");
+            st.detail = format!(
+                "Capture directe Photon multi-interfaces active sur {local_ip} (UDP 5056/5055/4535)"
+            );
             st.needs_elevation = false;
         }
 
@@ -306,5 +513,44 @@ fn windows_raw_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mute
         }
 
         closesocket(raw_sock);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use albion_core::photon::wrap_ipv4_udp_packet;
+
+    #[test]
+    fn parses_tcpdump_hex_and_locates_photon_udp_across_link_headers() {
+        let _ = detect_candidate_ipv4s();
+        let payload = [241u8, 1, 2, 3, 4, 5];
+        let ipv4 = wrap_ipv4_udp_packet(
+            [193, 169, 238, 10],
+            [192, 168, 1, 20],
+            5056,
+            55000,
+            &payload,
+        );
+        // Prepend a 14-byte Ethernet header before the IPv4 packet
+        let mut eth_frame = vec![0xaa; 14];
+        eth_frame.extend_from_slice(&ipv4);
+
+        let mut hex_line = String::from("  0x0000:  ");
+        for pair in eth_frame.chunks(2) {
+            if pair.len() == 2 {
+                hex_line.push_str(&format!("{:02x}{:02x} ", pair[0], pair[1]));
+            } else {
+                hex_line.push_str(&format!("{:02x} ", pair[0]));
+            }
+        }
+
+        let mut decoded = Vec::new();
+        assert!(parse_tcpdump_hex_line(&hex_line, &mut decoded));
+        assert_eq!(decoded, eth_frame);
+
+        let udp = find_ipv4_udp_in_frame(&decoded).unwrap();
+        assert_eq!(udp.src_port, 5056);
+        assert_eq!(udp.payload, &payload);
     }
 }

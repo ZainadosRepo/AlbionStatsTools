@@ -278,6 +278,7 @@ pub struct NetworkDiagnostics {
 pub struct AppSnapshot {
     pub catalog_version: String,
     pub catalog_item_count: usize,
+    pub catalog_spell_count: usize,
     pub local_player: LocalPlayerProfile,
     pub combat_seconds: f64,
     pub total_party_damage: i64,
@@ -354,6 +355,8 @@ pub struct AnalyzerEngine {
     last_now_ms: u64,
     combat_start_ms: Option<u64>,
     combat_end_ms: Option<u64>,
+    last_auto_snapshot_combat_ms: Option<u64>,
+    dirty_history: bool,
     pub telemetry_events_processed: u64,
 
     local_player: LocalPlayerProfile,
@@ -413,6 +416,8 @@ impl AnalyzerEngine {
             last_now_ms: now_ms,
             combat_start_ms: None,
             combat_end_ms: None,
+            last_auto_snapshot_combat_ms: None,
+            dirty_history: false,
             telemetry_events_processed: 0,
             local_player: LocalPlayerProfile {
                 object_id: 0,
@@ -469,6 +474,11 @@ impl AnalyzerEngine {
             trades: Vec::new(),
             next_seq_id: 1,
         }
+    }
+
+    /// Returns `true` and clears the dirty flag if persisted history changed since the last flush.
+    pub fn take_dirty_history(&mut self) -> bool {
+        std::mem::replace(&mut self.dirty_history, false)
     }
 
     fn alloc_id(&mut self) -> u64 {
@@ -656,7 +666,12 @@ impl AnalyzerEngine {
                 in_passive_combat,
             } => {
                 if object_id == self.local_player.object_id {
-                    self.local_player.in_combat = in_active_combat || in_passive_combat;
+                    let was_in_combat = self.local_player.in_combat;
+                    let now_in_combat = in_active_combat || in_passive_combat;
+                    self.local_player.in_combat = now_in_combat;
+                    if was_in_combat && !now_in_combat {
+                        self.maybe_auto_snapshot_combat(now_ms);
+                    }
                 }
             }
             AlbionTelemetryEvent::HealthUpdate(tick) => {
@@ -1003,12 +1018,18 @@ impl AnalyzerEngine {
         mists_dungeon_tier: i32,
         now_ms: u64,
     ) {
+        if self.local_player.in_combat || self.combat_start_ms.is_some() {
+            self.maybe_auto_snapshot_combat(now_ms);
+            self.local_player.in_combat = false;
+        }
+
         // Finalize any currently active dungeon run
         if let Some(prev) = self.dungeons.first_mut().filter(|d| d.is_active) {
             prev.is_active = false;
             let elapsed_s = ((now_ms.saturating_sub(prev.started_at_ms)) as f64 / 1000.0).max(1.0);
             prev.duration_seconds = elapsed_s;
             prev.fame_per_hour = prev.fame / (elapsed_s / 3600.0);
+            self.dirty_history = true;
         }
 
         let cluster_meta = self.catalog.cluster(index).cloned();
@@ -1079,6 +1100,7 @@ impl AnalyzerEngine {
             if self.dungeons.len() > MAX_DUNGEON_RUNS {
                 self.dungeons.truncate(MAX_DUNGEON_RUNS);
             }
+            self.dirty_history = true;
         }
     }
 
@@ -1161,6 +1183,7 @@ impl AnalyzerEngine {
         if self.gathering_log.len() > MAX_GATHERING_LOG {
             self.gathering_log.truncate(MAX_GATHERING_LOG);
         }
+        self.dirty_history = true;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1244,6 +1267,7 @@ impl AnalyzerEngine {
         if self.loot_log.len() > MAX_LOOT_LOG {
             self.loot_log.truncate(MAX_LOOT_LOG);
         }
+        self.dirty_history = true;
     }
 
     fn handle_auction_entries(&mut self, is_requests: bool, raw_json_entries: &[String]) {
@@ -1319,6 +1343,7 @@ impl AnalyzerEngine {
     pub fn reset_meter(&mut self) {
         self.combat_start_ms = None;
         self.combat_end_ms = None;
+        self.last_auto_snapshot_combat_ms = None;
         self.last_player_health.clear();
         for ent in self.entities.values_mut() {
             ent.damage = 0;
@@ -1363,6 +1388,27 @@ impl AnalyzerEngine {
         }
     }
 
+    /// Automatically archives a snapshot when exiting a meaningful fight (>= 500 output)
+    /// if the current combat has not already been snapshotted.
+    fn maybe_auto_snapshot_combat(&mut self, now_ms: u64) {
+        let Some(start_ms) = self.combat_start_ms else {
+            return;
+        };
+        if self.last_auto_snapshot_combat_ms == Some(start_ms) {
+            return;
+        }
+        let (combat_seconds, total_damage, total_heal, total_taken, players) =
+            self.compute_meter_players();
+        if players.is_empty() || (total_damage + total_heal + total_taken) < 500 {
+            return;
+        }
+        let auto_label = format!(
+            "Auto • {} ({:.0}s)",
+            self.local_player.current_map_name_fr, combat_seconds
+        );
+        let _ = self.take_snapshot(Some(auto_label), now_ms);
+    }
+
     /// Saves the current combat meter state as a named snapshot.
     pub fn take_snapshot(
         &mut self,
@@ -1374,6 +1420,7 @@ impl AnalyzerEngine {
         if players.is_empty() {
             return None;
         }
+        self.last_auto_snapshot_combat_ms = self.combat_start_ms;
         let id = format!("snap-{}", self.alloc_id());
         let label = custom_label
             .filter(|s| !s.trim().is_empty())
@@ -1398,13 +1445,18 @@ impl AnalyzerEngine {
         if self.snapshots.len() > MAX_SNAPSHOTS {
             self.snapshots.truncate(MAX_SNAPSHOTS);
         }
+        self.dirty_history = true;
         Some(snap)
     }
 
     pub fn delete_snapshot(&mut self, id: &str) -> bool {
         let before = self.snapshots.len();
         self.snapshots.retain(|s| s.id != id);
-        self.snapshots.len() != before
+        let deleted = self.snapshots.len() != before;
+        if deleted {
+            self.dirty_history = true;
+        }
+        deleted
     }
 
     /// Exports persisted history (snapshots, dungeons, gathering, loot) for disk storage.
@@ -1703,6 +1755,7 @@ impl AnalyzerEngine {
         AppSnapshot {
             catalog_version: self.catalog.version.clone(),
             catalog_item_count: self.catalog.item_count(),
+            catalog_spell_count: self.catalog.spell_count(),
             local_player: self.local_player.clone(),
             combat_seconds,
             total_party_damage,
@@ -2282,5 +2335,28 @@ mod tests {
         assert_eq!(restored.dungeons.len(), 1);
         assert!(!restored.dungeons[0].is_active);
         assert_eq!(restored.loot_log.len(), 1);
+    }
+
+    #[test]
+    fn auto_snapshots_combat_on_exit_without_duplicates() {
+        let catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let mut engine = AnalyzerEngine::new(catalog, 1_000);
+        engine.run_wire_simulation_scenario(1_000);
+        assert!(engine.take_dirty_history());
+        assert!(!engine.take_dirty_history());
+
+        // Leaving combat should archive an Auto snapshot once
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::InCombatStateUpdate {
+                object_id: 101,
+                in_active_combat: false,
+                in_passive_combat: false,
+            },
+            25_000,
+        );
+        assert!(engine.take_dirty_history());
+        let snap = engine.snapshot(25_500);
+        assert_eq!(snap.snapshots.len(), 1);
+        assert!(snap.snapshots[0].label.starts_with("Auto • "));
     }
 }
