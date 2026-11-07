@@ -27,6 +27,8 @@ pub struct SpellEntry {
     pub name_fr: String,
     pub name_en: String,
     pub category: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_sprite: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -357,6 +359,7 @@ impl Catalog {
             let self_closing = open_tag_slice.trim_end().ends_with('/');
 
             let unique_name = extract_xml_attr(open_tag_slice, "uniquename").unwrap_or_default();
+            let ui_sprite = extract_xml_attr(open_tag_slice, "uisprite").filter(|s| !s.is_empty());
             let raw_cat = extract_xml_attr(open_tag_slice, "category")
                 .or_else(|| extract_xml_attr(open_tag_slice, "uitype"))
                 .unwrap_or_else(|| "damage".into());
@@ -374,6 +377,7 @@ impl Catalog {
                         name_fr: readable.clone(),
                         name_en: readable,
                         category: normalize_spell_category(&raw_cat),
+                        ui_sprite: ui_sprite.clone(),
                     },
                 );
                 added += 1;
@@ -401,6 +405,7 @@ impl Catalog {
                                 name_fr: format!("{readable} (Canal.)"),
                                 name_en: format!("{readable} (Channel)"),
                                 category: normalize_spell_category(&raw_cat),
+                                ui_sprite,
                             },
                         );
                         added += 1;
@@ -588,7 +593,7 @@ mod tests {
             <!-- <activespell uniquename="COMMENTED_OUT" /> -->
             <colortag tag="[dmg]" />
             <passivespell uniquename="PASSIVE_MAXLOAD" />
-            <activespell uniquename="FLAME_PILLAR" category="damage">
+            <activespell uniquename="FLAME_PILLAR" uisprite="FIRESTAFF_FLAMEPILLAR" category="damage">
                 <channelingspell effectcount="3" />
             </activespell>
             <togglespell uniquename="TOGGLE_AURA" category="heal" />
@@ -597,8 +602,16 @@ mod tests {
         assert_eq!(spells_added, 3);
         assert_eq!(catalog.spell(0).unwrap().unique_name, "AUTO_ATTACK");
         assert_eq!(catalog.spell(1).unwrap().unique_name, "FLAME_PILLAR");
+        assert_eq!(
+            catalog.spell(1).unwrap().ui_sprite.as_deref(),
+            Some("FIRESTAFF_FLAMEPILLAR")
+        );
         assert_eq!(catalog.spell(1).unwrap().name_fr, "Flame Pillar");
         assert_eq!(catalog.spell(2).unwrap().name_fr, "Flame Pillar (Canal.)");
+        assert_eq!(
+            catalog.spell(2).unwrap().ui_sprite.as_deref(),
+            Some("FIRESTAFF_FLAMEPILLAR")
+        );
         assert_eq!(catalog.spell(3).unwrap().unique_name, "TOGGLE_AURA");
         assert_eq!(catalog.spell(3).unwrap().category, "heal");
 

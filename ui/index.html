@@ -3,76 +3,346 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Albion Stats — Compteur DPS/HPS temps réel, télémétrie de session, récolte, butin et calculateur de rendement d'artisanat pour Albion Online."
+    />
     <title>Albion Stats</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <!-- Crisp inline vector icon sprite sheet (zero OS emoji dependency) -->
+    <svg class="svg-sprite" aria-hidden="true">
+      <defs>
+        <symbol id="ico-brand" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2.5L20 7v10l-8 4.5L4 17V7l8-4.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+          <path d="M12 6.5L16.2 12 12 17.5 7.8 12 12 6.5Z" fill="currentColor" fill-opacity="0.22" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+        </symbol>
+        <symbol id="ico-combat" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12.8 2.2L13.8 3.2 12.6 6.1 6.2 12.5 3.5 9.8 9.9 3.4 12.8 2.2Z" />
+          <path d="M2.5 13.5l2.3-2.3M2.8 9.1l4.1 4.1" />
+          <path d="M3.2 2.2L2.2 3.2 3.4 6.1 5.6 8.3M13.5 13.5l-2.3-2.3M13.2 9.1l-4.1 4.1" />
+        </symbol>
+        <symbol id="ico-session" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M1.8 10.5h2.6l1.9-5.5 2.6 7 2-4.5h3.3" />
+        </symbol>
+        <symbol id="ico-dungeons" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 13.8V7.2a5 5 0 0 1 10 0v6.6" />
+          <path d="M5.8 13.8V8.4a2.2 2.2 0 0 1 4.4 0v5.4" />
+          <path d="M1.8 13.8h12.4" />
+        </symbol>
+        <symbol id="ico-gathering" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.2 3.4c2.8-1.4 6.2-.8 8.4 1.4-2.2-.5-4.7 0-6.5 1.8" />
+          <path d="M9.6 6.4L3 13" />
+          <path d="M12.6 4.8c.5 1.8.2 3.9-.9 5.5" />
+        </symbol>
+        <symbol id="ico-loot" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2.2" y="4.8" width="11.6" height="8.8" rx="1.6" />
+          <path d="M5.4 4.8V3.6a2.6 2.6 0 0 1 5.2 0v1.2M2.2 8.4h11.6M8 7.4v2.2" />
+        </symbol>
+        <symbol id="ico-economy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 2.2v11.6M4.8 13.8h6.4M3.2 4.6h9.6" />
+          <path d="M3.2 4.6L1.7 8.4a2.1 2.1 0 0 0 3 0L3.2 4.6ZM12.8 4.6l-1.5 3.8a2.1 2.1 0 0 0 3 0l-1.5-3.8Z" />
+        </symbol>
+        <symbol id="ico-database" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <ellipse cx="8" cy="3.8" rx="5.2" ry="2" />
+          <path d="M2.8 3.8v4.2c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V3.8" />
+          <path d="M2.8 8v4.2c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V8" />
+        </symbol>
+        <symbol id="ico-bolt" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8.8 1.8L3.4 8.8h4.2l-.8 5.4 5.8-7H8.4l.4-5.4Z" />
+        </symbol>
+        <symbol id="ico-user" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="8" cy="5.2" r="2.6" />
+          <path d="M3.2 13.6a4.8 4.8 0 0 1 9.6 0" />
+        </symbol>
+        <symbol id="ico-pin-map" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 14s4.4-4.1 4.4-7.6a4.4 4.4 0 1 0-8.8 0C3.6 9.9 8 14 8 14Z" />
+          <circle cx="8" cy="6.4" r="1.5" />
+        </symbol>
+        <symbol id="ico-coins" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="6.8" cy="6.8" r="4.2" />
+          <path d="M10.4 5.4a4.2 4.2 0 1 1-5 5" />
+        </symbol>
+        <symbol id="ico-overlay" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="2.6" width="12" height="10.8" rx="1.6" />
+          <rect x="7.8" y="6.8" width="4.6" height="4.8" rx="0.8" fill="currentColor" fill-opacity="0.25" />
+        </symbol>
+        <symbol id="ico-eye" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M1.6 8s2.4-4.2 6.4-4.2S14.4 8 14.4 8s-2.4 4.2-6.4 4.2S1.6 8 1.6 8Z" />
+          <circle cx="8" cy="8" r="1.8" />
+        </symbol>
+        <symbol id="ico-ghost" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.2 13.8V7a4.8 4.8 0 0 1 9.6 0v6.8l-2.4-1.6-2.4 1.6-2.4-1.6-2.4 1.6Z" />
+          <circle cx="6.4" cy="6.8" r="0.7" fill="currentColor" />
+          <circle cx="9.6" cy="6.8" r="0.7" fill="currentColor" />
+        </symbol>
+        <symbol id="ico-pin" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9.8 2.4l3.8 3.8-1.5 1.5-.8-.4-2.5 2.5.4 2.2-1.1 1.1-2.8-2.8-2.9 2.9M6.2 10.3L3.4 7.5l1.1-1.1 2.2.4 2.5-2.5-.4-.8 1-1.1Z" />
+        </symbol>
+        <symbol id="ico-shield" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 2L13 4.1v3.8c0 3.2-2.1 5.3-5 6.3-2.9-1-5-3.1-5-6.3V4.1L8 2Z" />
+        </symbol>
+        <symbol id="ico-min" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <path d="M3.5 8.5h9" />
+        </symbol>
+        <symbol id="ico-max" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <rect x="3.5" y="3.5" width="9" height="9" rx="1" />
+        </symbol>
+        <symbol id="ico-restore" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <rect x="3.2" y="5.4" width="7.4" height="7.4" rx="0.9" />
+          <path d="M5.6 5.4V3.9c0-.4.3-.7.7-.7h5.8c.4 0 .7.3.7.7v5.8c0 .4-.3.7-.7.7h-1.5" />
+        </symbol>
+        <symbol id="ico-close" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <path d="M4 4l8 8M12 4l-8 8" />
+        </symbol>
+        <symbol id="ico-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="5.4" y="5.4" width="8.2" height="8.2" rx="1.3" />
+          <path d="M3.6 10.6H3a1.2 1.2 0 0 1-1.2-1.2V3A1.2 1.2 0 0 1 3 1.8h6.4A1.2 1.2 0 0 1 10.6 3v.6" />
+        </symbol>
+        <symbol id="ico-camera" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2.2 5.2h2.1l1.1-1.6h5.2l1.1 1.6h2.1a1.2 1.2 0 0 1 1.2 1.2v6a1.2 1.2 0 0 1-1.2 1.2H2.2A1.2 1.2 0 0 1 1 12.4v-6a1.2 1.2 0 0 1 1.2-1.2Z" />
+          <circle cx="8" cy="9.2" r="2.2" />
+        </symbol>
+        <symbol id="ico-reset" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2.6 5.2V2.4M2.6 5.2h2.8" />
+          <path d="M3 9.5a5.2 5.2 0 1 0 .6-4.3L2.6 5.2" />
+        </symbol>
+        <symbol id="ico-trash" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2.8 4.2h10.4M6.2 4.2V2.8h3.6v1.4M4.2 4.2l.6 9.2h6.4l.6-9.2" />
+        </symbol>
+        <symbol id="ico-download" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 2.4v7.8M5.2 7.6L8 10.4l2.8-2.8M2.8 13.2h10.4" />
+        </symbol>
+        <symbol id="ico-search" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <circle cx="7.2" cy="7.2" r="4.4" />
+          <path d="M10.5 10.5l3.1 3.1" />
+        </symbol>
+        <symbol id="ico-refresh" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M13.4 3v3.2h-3.2M2.6 13V9.8h3.2" />
+          <path d="M13.1 6.2A5.3 5.3 0 0 0 4.1 4.4M2.9 9.8a5.3 5.3 0 0 0 9 1.8" />
+        </symbol>
+        <symbol id="ico-hammer" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9.4 3.2l3.4 3.4M7.8 4.8L3 9.6 6.4 13l4.8-4.8M9.8 9.8l3.2 3.2" />
+        </symbol>
+        <symbol id="ico-clock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="8" cy="8" r="5.6" />
+          <path d="M8 4.8V8l2.2 1.4" />
+        </symbol>
+        <symbol id="ico-wood" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 2.2L3.6 8.4h2.6L4.2 12h7.6L9.8 8.4h2.6L8 2.2ZM8 12v2" />
+        </symbol>
+        <symbol id="ico-ore" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5.2 2.8h5.6l3 4.4-5.8 6-5.8-6 3-4.4Z" />
+          <path d="M2.2 7.2h11.6M8 2.8v10.4" />
+        </symbol>
+        <symbol id="ico-fiber" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 13.8V5.2M8 8.8c-2.6 0-4.4-1.8-4.4-4.4 2.6 0 4.4 1.8 4.4 4.4ZM8 10.6c2.6 0 4.4-1.8 4.4-4.4-2.6 0-4.4 1.8-4.4 4.4Z" />
+        </symbol>
+        <symbol id="ico-hide" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.2 2.8l2 1.4h3.6l2-1.4.8 3.2-1.4 2v4.6l-3.2-.8-3.2.8V8l-1.4-2 .8-3.2Z" />
+        </symbol>
+        <symbol id="ico-rock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.6 12.8l-1.4-4.6L6.2 3h4.2l3.4 5.2-1.4 4.6H3.6Z" />
+        </symbol>
+        <symbol id="ico-fish" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M1.8 8s2.6-3.6 6.4-3.6c2.2 0 4 1.4 5.8 3.6-1.8 2.2-3.6 3.6-5.8 3.6C4.4 11.6 1.8 8 1.8 8Z" />
+          <path d="M1.8 8L.8 5.6M1.8 8L.8 10.4" />
+          <circle cx="10.4" cy="7.4" r="0.6" fill="currentColor" />
+        </symbol>
+
+        <!-- Fallback item & spell slot glyphs -->
+        <symbol id="ico-slot-weapon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18.5 3.5l2 2-9.5 9.5-3.5-3.5 9.5-9.5Z" />
+          <path d="M6.5 13.5l4 4M8.5 15.5l-4 4M3.5 18.5l2 2" />
+        </symbol>
+        <symbol id="ico-slot-armor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8.5 4L12 6l3.5-2 4 3-2 4.5V20h-11v-8.5L4.5 7l4-3Z" />
+        </symbol>
+        <symbol id="ico-slot-bag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4.5" y="7.5" width="15" height="12" rx="2.2" />
+          <path d="M8.5 7.5V6a3.5 3.5 0 0 1 7 0v1.5M4.5 12h15" />
+        </symbol>
+        <symbol id="ico-slot-potion" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9.5 3.5h5M10.5 3.5v4.2L5.8 15.5a3 3 0 0 0 2.6 4.5h7.2a3 3 0 0 0 2.6-4.5l-4.7-7.8V3.5" />
+          <path d="M7.2 14.5h9.6" />
+        </symbol>
+        <symbol id="ico-slot-resource" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3l7 5.5-2.8 11.5H7.8L5 8.5 12 3Z" />
+          <path d="M12 3v17M5 8.5h14" />
+        </symbol>
+        <symbol id="ico-slot-silver" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="7.5" />
+          <circle cx="12" cy="12" r="4.2" />
+        </symbol>
+        <symbol id="ico-spell-attack" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 5L5 19M14 4h6v6M5 14l5 5" />
+        </symbol>
+        <symbol id="ico-spell-damage" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3c2.5 3.2 5.5 5.6 5.5 10a5.5 5.5 0 0 1-11 0c0-2.6 1.3-4.8 2.8-6.4.3 1.8 1.5 2.6 2.7 2.8-.4-2.2.2-4.5 0-6.4Z" />
+        </symbol>
+        <symbol id="ico-spell-heal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5v14M5 12h14" />
+        </symbol>
+        <symbol id="ico-spell-buff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3.5L19 6.5v5.2c0 4.6-2.9 7.6-7 9.1-4.1-1.5-7-4.5-7-9.1V6.5l7-3Z" />
+        </symbol>
+      </defs>
+    </svg>
+
     <div id="app" class="app-shell">
-      <!-- Frameless Titlebar -->
+      <!-- Frameless Window Titlebar -->
       <header class="titlebar" data-tauri-drag-region>
         <div class="titlebar-brand" data-tauri-drag-region>
-          <span class="brand-emblem" aria-hidden="true">⚔</span>
-          <span class="brand-name" data-tauri-drag-region>Albion Stats</span>
+          <span class="brand-emblem" aria-hidden="true">
+            <svg class="ico ico-lg"><use href="#ico-brand"></use></svg>
+          </span>
+          <h1 class="brand-name" data-tauri-drag-region>Albion Stats</h1>
           <span id="capture-badge" class="status-badge status-standby" title="État de la capture Photon UDP 5056">
             <span class="badge-dot"></span>
-            <span class="badge-text">Prêt / Simulateur</span>
+            <span class="badge-text">Simulateur</span>
           </span>
-          <button id="btn-elevate" class="tb-btn tb-btn-accent" type="button" title="Relancer Albion Stats en Administrateur pour activer la capture directe sur le port UDP 5056" hidden>
-            🛡 Activer Admin
+          <button
+            id="btn-elevate"
+            class="tb-btn tb-btn-accent"
+            type="button"
+            title="Relancer Albion Stats en Administrateur pour activer la capture directe sur le port UDP 5056"
+            hidden
+          >
+            <svg class="ico"><use href="#ico-shield"></use></svg>
+            <span class="tb-btn-label">Mode Admin</span>
           </button>
         </div>
 
         <div id="player-pill" class="player-pill" data-tauri-drag-region>
-          <span class="pill-seg"><span class="pill-ico">👤</span><span id="header-player-name" class="player-name">En attente…</span></span>
-          <span class="pill-sep">•</span>
-          <span class="pill-seg"><span class="pill-ico">📍</span><span id="header-map-name" class="player-map">Caerleon</span></span>
-          <span class="pill-sep">•</span>
-          <span class="pill-seg"><span class="pill-ico">🪙</span><strong id="header-silver" class="player-silver">0 Ag</strong></span>
+          <span class="pill-seg pill-seg-player">
+            <svg class="ico pill-ico"><use href="#ico-user"></use></svg>
+            <span id="header-player-name" class="player-name">En attente…</span>
+          </span>
+          <span class="pill-sep" aria-hidden="true"></span>
+          <span class="pill-seg pill-seg-map">
+            <svg class="ico pill-ico"><use href="#ico-pin-map"></use></svg>
+            <span id="header-map-name" class="player-map">Caerleon</span>
+          </span>
+          <span class="pill-sep" aria-hidden="true"></span>
+          <span class="pill-seg pill-seg-silver">
+            <svg class="ico pill-ico"><use href="#ico-coins"></use></svg>
+            <strong id="header-silver" class="player-silver">0 Ag</strong>
+          </span>
         </div>
 
         <div class="titlebar-actions">
-          <button id="btn-compact" class="tb-btn tb-btn-pill" type="button" title="Basculer le mode mini-overlay de combat">
-            ◫ Overlay
+          <button
+            id="btn-compact"
+            class="tb-btn"
+            type="button"
+            title="Basculer le mode mini-overlay compact"
+          >
+            <svg class="ico"><use href="#ico-overlay"></use></svg>
+            <span class="tb-btn-label">Compact</span>
           </button>
           <div class="opacity-control" title="Opacité de la fenêtre overlay">
-            <span class="opacity-icon" aria-hidden="true">👁</span>
-            <input id="overlay-opacity" class="opacity-slider" type="range" min="35" max="100" value="96" title="Opacité de la fenêtre overlay" aria-label="Opacité de la fenêtre overlay" />
+            <svg class="ico opacity-icon" aria-hidden="true"><use href="#ico-eye"></use></svg>
+            <input
+              id="overlay-opacity"
+              class="opacity-slider"
+              type="range"
+              min="35"
+              max="100"
+              value="96"
+              title="Opacité de la fenêtre overlay"
+              aria-label="Opacité de la fenêtre overlay"
+            />
           </div>
-          <button id="btn-click-through" class="tb-btn tb-btn-icon" type="button" title="Mode souris traversante (Ctrl+Alt+L pour verrouiller/déverrouiller)">
-            👻
+          <button
+            id="btn-click-through"
+            class="tb-btn tb-btn-icon"
+            type="button"
+            title="Mode souris traversante (Ctrl+Alt+L pour verrouiller/déverrouiller)"
+            aria-label="Mode souris traversante"
+          >
+            <svg class="ico"><use href="#ico-ghost"></use></svg>
           </button>
-          <button id="btn-pin" class="tb-btn tb-btn-icon" type="button" title="Épingler au-dessus du jeu (Ctrl+Alt+M pour afficher/masquer)">
-            📌
+          <button
+            id="btn-pin"
+            class="tb-btn tb-btn-icon"
+            type="button"
+            title="Épingler au-dessus du jeu (Ctrl+Alt+M pour afficher/masquer)"
+            aria-label="Épingler au-dessus du jeu"
+          >
+            <svg class="ico"><use href="#ico-pin"></use></svg>
           </button>
           <div class="window-control-sep" aria-hidden="true"></div>
-          <button id="btn-min" class="tb-btn tb-btn-window" type="button" title="Réduire">─</button>
-          <button id="btn-close" class="tb-btn tb-btn-window tb-btn-close" type="button" title="Fermer">✕</button>
+          <button id="btn-min" class="tb-btn tb-btn-window" type="button" title="Réduire" aria-label="Réduire">
+            <svg class="ico"><use href="#ico-min"></use></svg>
+          </button>
+          <button id="btn-max" class="tb-btn tb-btn-window" type="button" title="Agrandir" aria-label="Agrandir">
+            <svg class="ico"><use id="btn-max-use" href="#ico-max"></use></svg>
+          </button>
+          <button id="btn-close" class="tb-btn tb-btn-window tb-btn-close" type="button" title="Fermer" aria-label="Fermer">
+            <svg class="ico"><use href="#ico-close"></use></svg>
+          </button>
         </div>
       </header>
 
       <div id="click-through-banner" class="click-through-banner" hidden>
-        👻 Mode souris traversante actif — appuyez sur <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>L</kbd> pour déverrouiller l'interface
+        <svg class="ico"><use href="#ico-ghost"></use></svg>
+        <span>Mode souris traversante actif — <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>L</kbd> pour déverrouiller</span>
       </div>
 
-      <!-- Navigation Bar -->
+      <!-- Navigation Bar (Zero internal scrollbar, adapts cleanly down to 360px) -->
       <nav id="main-nav" class="nav-bar-container" aria-label="Sections principales">
-        <div class="nav-tabs">
-          <button class="nav-tab active" data-tab="combat" type="button">⚔ Combat &amp; DPS</button>
-          <button class="nav-tab" data-tab="session" type="button">📈 Session &amp; Factions</button>
-          <button class="nav-tab" data-tab="dungeons" type="button">🏰 Donjons &amp; Brumes</button>
-          <button class="nav-tab" data-tab="gathering" type="button">⛏ Récolte</button>
-          <button class="nav-tab" data-tab="loot" type="button">🎒 Butin &amp; Groupe</button>
-          <button class="nav-tab" data-tab="economy" type="button">⚖ Marché &amp; Craft</button>
+        <div class="nav-tabs" role="tablist">
+          <button class="nav-tab active" data-tab="combat" type="button" title="Combat &amp; DPS">
+            <svg class="ico"><use href="#ico-combat"></use></svg>
+            <span class="tab-label">Combat</span>
+          </button>
+          <button class="nav-tab" data-tab="session" type="button" title="Session &amp; Factions">
+            <svg class="ico"><use href="#ico-session"></use></svg>
+            <span class="tab-label">Session</span>
+          </button>
+          <button class="nav-tab" data-tab="dungeons" type="button" title="Donjons &amp; Brumes">
+            <svg class="ico"><use href="#ico-dungeons"></use></svg>
+            <span class="tab-label">Donjons</span>
+          </button>
+          <button class="nav-tab" data-tab="gathering" type="button" title="Récolte">
+            <svg class="ico"><use href="#ico-gathering"></use></svg>
+            <span class="tab-label">Récolte</span>
+          </button>
+          <button class="nav-tab" data-tab="loot" type="button" title="Butin &amp; Inspection">
+            <svg class="ico"><use href="#ico-loot"></use></svg>
+            <span class="tab-label">Butin &amp; Groupe</span>
+          </button>
+          <button class="nav-tab" data-tab="economy" type="button" title="Marché &amp; Artisanat">
+            <svg class="ico"><use href="#ico-economy"></use></svg>
+            <span class="tab-label">Marché &amp; Craft</span>
+          </button>
         </div>
         <div class="nav-actions">
-          <button id="btn-sync-catalog" class="btn btn-secondary btn-sm" type="button" title="Télécharger et mettre en cache le catalogue complet ao-bin-dumps (objets + zones + sorts)">
-            📦 Base (<span id="catalog-count">60</span>)
+          <button
+            id="btn-sync-catalog"
+            class="btn btn-secondary btn-sm"
+            type="button"
+            title="Télécharger et mettre en cache le catalogue complet ao-bin-dumps (objets + zones + sorts)"
+          >
+            <svg class="ico"><use href="#ico-database"></use></svg>
+            <span class="nav-action-label">Catalogue</span>
+            <span id="catalog-count" class="mono-tag">60</span>
           </button>
-          <button id="btn-simulate" class="btn btn-primary btn-sm" type="button" title="Injecter un scénario réseau Photon complet (combat 5v5, brumes, récolte, butin, marché)">
-            ⚡ Simuler Session
+          <button
+            id="btn-simulate"
+            class="btn btn-primary btn-sm"
+            type="button"
+            title="Injecter un scénario réseau Photon complet (combat 5v5, brumes, récolte, butin, marché)"
+          >
+            <svg class="ico"><use href="#ico-bolt"></use></svg>
+            <span class="nav-action-label">Simuler</span>
           </button>
         </div>
       </nav>
@@ -94,45 +364,63 @@
             </div>
 
             <div class="toolbar-metrics">
-              <span class="metric-chip">⏱ <strong id="combat-timer">0s</strong></span>
-              <span class="metric-chip metric-dmg">⚔ <strong id="party-total-dmg">0</strong></span>
-              <span class="metric-chip metric-heal">✚ <strong id="party-total-heal">0</strong></span>
-              <span class="metric-chip metric-taken">🛡 <strong id="party-total-taken">0</strong></span>
+              <span class="metric-chip" title="Durée du combat actif">
+                <svg class="ico"><use href="#ico-clock"></use></svg>
+                <strong id="combat-timer">0s</strong>
+              </span>
+              <span class="metric-chip metric-dmg" title="Dégâts totaux du groupe">
+                <span class="metric-dot dot-dmg"></span>
+                <span class="metric-prefix">Dégâts</span>
+                <strong id="party-total-dmg">0</strong>
+              </span>
+              <span class="metric-chip metric-heal" title="Soins totaux du groupe">
+                <span class="metric-dot dot-heal"></span>
+                <span class="metric-prefix">Soins</span>
+                <strong id="party-total-heal">0</strong>
+              </span>
+              <span class="metric-chip metric-taken" title="Dégâts subis par le groupe">
+                <span class="metric-dot dot-taken"></span>
+                <span class="metric-prefix">Subis</span>
+                <strong id="party-total-taken">0</strong>
+              </span>
             </div>
 
             <div class="toolbar-buttons">
               <button id="btn-copy-meter" class="btn btn-secondary" type="button" title="Copier le classement dans le presse-papiers">
-                📋 Copier
+                <svg class="ico"><use href="#ico-copy"></use></svg>
+                <span class="btn-label">Copier</span>
               </button>
               <button id="btn-snapshot-meter" class="btn btn-secondary" type="button" title="Sauvegarder ce combat dans les snapshots">
-                📸 Snapshot
+                <svg class="ico"><use href="#ico-camera"></use></svg>
+                <span class="btn-label">Snapshot</span>
               </button>
               <button id="btn-reset-meter" class="btn btn-danger" type="button" title="Réinitialiser le compteur de combat">
-                ↺ Reset
+                <svg class="ico"><use href="#ico-reset"></use></svg>
+                <span class="btn-label">Reset</span>
               </button>
             </div>
           </div>
 
           <div class="combat-grid">
-            <div class="card meter-card">
-              <div class="card-header">
+            <div class="panel meter-card">
+              <div class="panel-header">
                 <h2>Classement du Groupe</h2>
                 <div class="inline-controls">
                   <select id="snapshot-select" class="select-input" aria-label="Choisir un combat enregistré">
-                    <option value="live">🔴 Combat en direct</option>
+                    <option value="live">Combat en direct</option>
                   </select>
-                  <button id="btn-delete-snapshot" class="btn btn-danger" type="button" title="Supprimer ce snapshot" hidden>
-                    🗑
+                  <button id="btn-delete-snapshot" class="btn btn-danger btn-icon-only" type="button" title="Supprimer ce snapshot" hidden>
+                    <svg class="ico"><use href="#ico-trash"></use></svg>
                   </button>
                 </div>
               </div>
               <div id="meter-rows" class="meter-rows"></div>
             </div>
 
-            <div class="card spell-card">
-              <div class="card-header">
+            <div class="panel spell-card">
+              <div class="panel-header">
                 <h2 id="spell-panel-title">Détail des Sorts</h2>
-                <span id="spell-panel-weapon" class="badge-subtle">Cliquez sur un joueur</span>
+                <span id="spell-panel-weapon" class="badge-subtle">Sélectionnez un joueur</span>
               </div>
               <div id="spell-rows" class="spell-rows"></div>
             </div>
@@ -143,47 +431,48 @@
         <section id="tab-session" class="tab-panel">
           <div class="toolbar-row">
             <div class="toolbar-metrics">
-              <span class="metric-chip">Durée session : <strong id="sess-elapsed">0s</strong></span>
-              <span class="metric-chip">Paquets Photon : <strong id="sess-packets">0</strong></span>
-              <span class="metric-chip">Événements décodés : <strong id="sess-events">0</strong></span>
+              <span class="metric-chip">Durée <strong id="sess-elapsed">0s</strong></span>
+              <span class="metric-chip">Paquets UDP <strong id="sess-packets">0</strong></span>
+              <span class="metric-chip">Événements <strong id="sess-events">0</strong></span>
             </div>
             <div class="toolbar-buttons">
               <button id="btn-reset-session" class="btn btn-danger" type="button">
-                ↺ Réinitialiser la Session
+                <svg class="ico"><use href="#ico-reset"></use></svg>
+                <span>Réinitialiser la session</span>
               </button>
             </div>
           </div>
 
-          <div class="kpi-grid">
-            <article class="kpi-card kpi-fame">
+          <div class="kpi-strip">
+            <article class="kpi-cell kpi-fame">
               <span class="kpi-label">Renommée (Fame)</span>
               <strong id="kpi-fame" class="kpi-value">0</strong>
               <span id="kpi-fame-hr" class="kpi-sub">0 / heure</span>
-              <span id="kpi-fame-extra" class="kpi-foot">Bonus zone : 0 • Sacoche : 0</span>
+              <span id="kpi-fame-extra" class="kpi-foot">Zone : 0 • Sacoche : 0</span>
             </article>
 
-            <article class="kpi-card kpi-silver">
+            <article class="kpi-cell kpi-silver">
               <span class="kpi-label">Argent Ramassé (Net)</span>
               <strong id="kpi-silver" class="kpi-value">0</strong>
               <span id="kpi-silver-hr" class="kpi-sub">0 / heure</span>
               <span id="kpi-silver-tax" class="kpi-foot">Taxe guilde : 0 • Réparations : 0</span>
             </article>
 
-            <article class="kpi-card kpi-respec">
+            <article class="kpi-cell kpi-respec">
               <span class="kpi-label">Points de ReSpec</span>
               <strong id="kpi-respec" class="kpi-value">0</strong>
               <span id="kpi-respec-hr" class="kpi-sub">0 / heure</span>
               <span id="kpi-respec-cost" class="kpi-foot">Argent payé : 0</span>
             </article>
 
-            <article class="kpi-card kpi-might">
+            <article class="kpi-cell kpi-might">
               <span class="kpi-label">Puissance &amp; Faveur</span>
               <strong id="kpi-might" class="kpi-value">0 Might</strong>
               <span id="kpi-favor" class="kpi-sub">0 Faveur</span>
               <span id="kpi-might-hr" class="kpi-foot">0 Might/h • 0 Faveur/h</span>
             </article>
 
-            <article class="kpi-card kpi-pvp">
+            <article class="kpi-cell kpi-pvp">
               <span class="kpi-label">Bilan Combat &amp; Saison</span>
               <strong id="kpi-kd" class="kpi-value">0 K / 0 D</strong>
               <span id="kpi-focus" class="kpi-sub">Focus : 0 / 30 000</span>
@@ -191,9 +480,10 @@
             </article>
           </div>
 
-          <div class="card">
-            <div class="card-header">
-              <h2>Guerre de Factions (Jetons &amp; Points de Rang)</h2>
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Guerre de Factions</h2>
+              <span class="sub-inline">Jetons, rang et points de drapeau</span>
             </div>
             <div id="faction-rows" class="table-wrap"></div>
           </div>
@@ -201,9 +491,9 @@
 
         <!-- TAB 3: DUNGEONS & MISTS -->
         <section id="tab-dungeons" class="tab-panel">
-          <div class="card">
-            <div class="card-header">
-              <h2>Historique des Donjons, Brumes, Hellgates &amp; Corrompus</h2>
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Instances — Donjons, Brumes, Hellgates &amp; Corrompus</h2>
               <span id="dungeon-count-badge" class="badge-subtle">0 instance</span>
             </div>
             <div id="dungeon-rows" class="table-wrap"></div>
@@ -212,18 +502,36 @@
 
         <!-- TAB 4: GATHERING -->
         <section id="tab-gathering" class="tab-panel">
-          <div class="kpi-grid kpi-grid-6">
-            <article class="kpi-card"><span class="kpi-label">🌲 Bois</span><strong id="gat-wood" class="kpi-value">0</strong></article>
-            <article class="kpi-card"><span class="kpi-label">⛏ Minerai</span><strong id="gat-ore" class="kpi-value">0</strong></article>
-            <article class="kpi-card"><span class="kpi-label">🌿 Fibre</span><strong id="gat-fiber" class="kpi-value">0</strong></article>
-            <article class="kpi-card"><span class="kpi-label">🦌 Peau</span><strong id="gat-hide" class="kpi-value">0</strong></article>
-            <article class="kpi-card"><span class="kpi-label">🪨 Pierre</span><strong id="gat-rock" class="kpi-value">0</strong></article>
-            <article class="kpi-card"><span class="kpi-label">🐟 Poisson</span><strong id="gat-fish" class="kpi-value">0</strong></article>
+          <div class="kpi-strip kpi-strip-6">
+            <article class="kpi-cell kpi-resource">
+              <span class="kpi-label"><svg class="ico"><use href="#ico-wood"></use></svg> Bois</span>
+              <strong id="gat-wood" class="kpi-value">0</strong>
+            </article>
+            <article class="kpi-cell kpi-resource">
+              <span class="kpi-label"><svg class="ico"><use href="#ico-ore"></use></svg> Minerai</span>
+              <strong id="gat-ore" class="kpi-value">0</strong>
+            </article>
+            <article class="kpi-cell kpi-resource">
+              <span class="kpi-label"><svg class="ico"><use href="#ico-fiber"></use></svg> Fibre</span>
+              <strong id="gat-fiber" class="kpi-value">0</strong>
+            </article>
+            <article class="kpi-cell kpi-resource">
+              <span class="kpi-label"><svg class="ico"><use href="#ico-hide"></use></svg> Peau</span>
+              <strong id="gat-hide" class="kpi-value">0</strong>
+            </article>
+            <article class="kpi-cell kpi-resource">
+              <span class="kpi-label"><svg class="ico"><use href="#ico-rock"></use></svg> Pierre</span>
+              <strong id="gat-rock" class="kpi-value">0</strong>
+            </article>
+            <article class="kpi-cell kpi-resource">
+              <span class="kpi-label"><svg class="ico"><use href="#ico-fish"></use></svg> Poisson</span>
+              <strong id="gat-fish" class="kpi-value">0</strong>
+            </article>
           </div>
 
-          <div class="card">
-            <div class="card-header">
-              <h2>Journal de Récolte (Bonus Récolteur &amp; Premium inclus)</h2>
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Journal de Récolte</h2>
               <span id="gathering-summary-badge" class="badge-subtle">0 ressource • 0 Ag estimés</span>
             </div>
             <div id="gathering-rows" class="table-wrap"></div>
@@ -233,18 +541,21 @@
         <!-- TAB 5: LOOT & PARTY INSPECT -->
         <section id="tab-loot" class="tab-panel">
           <div class="combat-grid">
-            <div class="card">
-              <div class="card-header">
-                <h2>Inspection Équipement (Groupe &amp; Proximité)</h2>
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Inspection Équipement</h2>
                 <span id="inspect-count-badge" class="badge-subtle">0 joueur</span>
               </div>
               <div id="inspect-cards" class="inspect-grid"></div>
             </div>
 
-            <div class="card">
-              <div class="card-header">
-                <h2>Journal de Butin (Déduplication 2s)</h2>
-                <button id="btn-export-csv" class="btn btn-secondary" type="button">⬇ Exporter CSV</button>
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Journal de Butin</h2>
+                <button id="btn-export-csv" class="btn btn-secondary btn-sm" type="button">
+                  <svg class="ico"><use href="#ico-download"></use></svg>
+                  <span>Exporter CSV</span>
+                </button>
               </div>
               <div id="loot-rows" class="table-wrap"></div>
             </div>
@@ -253,157 +564,167 @@
 
         <!-- TAB 6: ECONOMY, MARKET & CRAFTING -->
         <section id="tab-economy" class="tab-panel">
-          <div class="combat-grid">
+          <div class="economy-grid">
             <!-- Crafting Calculator -->
-            <div class="card craft-card">
-              <div class="card-header">
+            <div class="panel craft-card">
+              <div class="panel-header">
                 <div>
-                  <h2>Calculateur de Rendement d'Artisanat (RRR) &amp; Profit</h2>
-                  <span class="sub-label">Simulation instantanée des marges, taxes et retours</span>
+                  <h2>Calculateur d'Artisanat (RRR) &amp; Coûts</h2>
+                  <span id="craft-prefill-note" class="sub-label">Simulation exacte des retours ressources, taxes station et marché</span>
                 </div>
               </div>
+
               <form id="craft-form" class="craft-form-layout">
-                <div class="craft-form-section">
-                  <div class="craft-section-label">🔨 Produit &amp; Volume</div>
-                  <div class="form-row form-row-2">
-                    <label class="field">
-                      <span class="field-title">Objet fabriqué</span>
-                      <div class="input-wrap">
-                        <input id="craft-name" type="text" value="Lames sculptées T7.1" required />
-                      </div>
-                    </label>
-                    <label class="field">
-                      <span class="field-title">Quantité produite</span>
-                      <div class="input-wrap has-suffix">
-                        <input id="craft-qty" type="number" min="1" max="9999" value="10" required />
-                        <span class="input-suffix">u</span>
-                      </div>
-                    </label>
-                  </div>
+                <div class="form-row form-row-product">
+                  <label class="field">
+                    <span class="field-title">Objet fabriqué</span>
+                    <div class="input-wrap">
+                      <input id="craft-name" type="text" value="Lames sculptées T7.1" required />
+                    </div>
+                  </label>
+                  <label class="field">
+                    <span class="field-title">Quantité</span>
+                    <div class="input-wrap has-suffix">
+                      <input id="craft-qty" type="number" min="1" max="9999" value="10" required />
+                      <span class="input-suffix">u</span>
+                    </div>
+                  </label>
                 </div>
 
-                <div class="craft-form-section">
-                  <div class="craft-section-label">💰 Prix de Vente &amp; Valeur Estimée</div>
-                  <div class="form-row form-row-3">
-                    <label class="field">
-                      <span class="field-title">Prix unitaire</span>
-                      <div class="input-wrap has-suffix">
-                        <input id="craft-sell" type="number" min="0" step="100" value="445000" required />
-                        <span class="input-suffix currency-silver">Ag</span>
-                      </div>
-                    </label>
-                    <label class="field">
-                      <span class="field-title">Valeur (ItemValue)</span>
-                      <div class="input-wrap">
-                        <input id="craft-item-val" type="number" min="0" step="10" value="5120" required />
-                      </div>
-                    </label>
-                    <label class="field">
-                      <span class="field-title">Gain journal / u</span>
-                      <div class="input-wrap has-suffix">
-                        <input id="craft-journal" type="number" min="0" step="100" value="14500" required />
-                        <span class="input-suffix currency-silver">Ag</span>
-                      </div>
-                    </label>
-                  </div>
+                <div class="form-row form-row-3">
+                  <label class="field">
+                    <span class="field-title">Prix vente / u</span>
+                    <div class="input-wrap has-suffix">
+                      <input id="craft-sell" type="number" min="0" step="100" value="445000" required />
+                      <span class="input-suffix currency-silver">Ag</span>
+                    </div>
+                  </label>
+                  <label class="field">
+                    <span class="field-title" title="Valeur interne de l'objet servant à calculer la nutrition consommée à l'établi (ItemValue × 0,1125)">ItemValue (nutr.)</span>
+                    <div class="input-wrap">
+                      <input id="craft-item-val" type="number" min="0" step="10" value="5120" required />
+                    </div>
+                  </label>
+                  <label class="field">
+                    <span class="field-title">Gain journal / u</span>
+                    <div class="input-wrap has-suffix">
+                      <input id="craft-journal" type="number" min="0" step="100" value="14500" required />
+                      <span class="input-suffix currency-silver">Ag</span>
+                    </div>
+                  </label>
                 </div>
 
-                <div class="craft-form-section">
-                  <div class="craft-section-label">⚖️ Station &amp; Bonus de Production (RRR)</div>
-                  <div class="form-row form-row-2">
-                    <div class="field">
-                      <div class="field-header-row">
-                        <span class="field-title">Bonus production (%)</span>
-                        <div class="preset-pill-group">
-                          <button type="button" class="preset-pill" data-preset-bonus="0" title="Sans bonus (Île personnelle ou guilde sans zone)">0%</button>
-                          <button type="button" class="preset-pill active" data-preset-bonus="18.0" title="Bonus classique de cité royale (18.0% = 15.25% RRR)">18% Cité</button>
-                          <button type="button" class="preset-pill" data-preset-bonus="47.9" title="Bonus avec point de focalisation (47.9% = 32.39% RRR)">47.9% Focus</button>
-                        </div>
-                      </div>
-                      <div class="input-wrap has-suffix">
-                        <input id="craft-bonus" type="number" min="0" max="200" step="0.1" value="18.0" required />
-                        <span class="input-suffix">%</span>
+                <div class="form-row form-row-2">
+                  <div class="field">
+                    <div class="field-header-row">
+                      <span class="field-title">Bonus prod.</span>
+                      <div class="preset-pill-group">
+                        <button type="button" class="preset-pill" data-preset-bonus="0" title="Île personnelle sans bonus (0% RRR)">0%</button>
+                        <button type="button" class="preset-pill active" data-preset-bonus="18.0" title="Cité royale standard (18% = 15,25% RRR)">18% Cité</button>
+                        <button type="button" class="preset-pill" data-preset-bonus="47.9" title="Focus sur île ou hors cité spécialisée (47,9% = 32,39% RRR)">47,9%</button>
+                        <button type="button" class="preset-pill" data-preset-bonus="77.0" title="Cité spécialisée + Focus (77% = 43,50% RRR)">77% Focus</button>
                       </div>
                     </div>
-                    <label class="field">
-                      <span class="field-title">Taxe station / 100 nutr.</span>
-                      <div class="input-wrap has-suffix">
-                        <input id="craft-fee" type="number" min="0" step="10" value="450" required />
-                        <span class="input-suffix currency-silver">Ag</span>
-                      </div>
-                    </label>
+                    <div class="input-wrap has-suffix">
+                      <input id="craft-bonus" type="number" min="0" max="200" step="0.1" value="18.0" required />
+                      <span class="input-suffix">%</span>
+                    </div>
                   </div>
+                  <label class="field">
+                    <span class="field-title">Taxe station / 100 nutr.</span>
+                    <div class="input-wrap has-suffix">
+                      <input id="craft-fee" type="number" min="0" step="10" value="450" required />
+                      <span class="input-suffix currency-silver">Ag</span>
+                    </div>
+                  </label>
                 </div>
 
-                <div class="craft-form-section">
-                  <div class="craft-section-label">🧱 Coûts des Composants</div>
-                  <div class="form-row form-row-2">
-                    <label class="field">
-                      <span class="field-title">Ressources avec RRR</span>
-                      <div class="input-wrap has-suffix">
-                        <input id="craft-mat-ret" type="number" min="0" step="100" value="288400" required />
-                        <span class="input-suffix currency-silver">Ag</span>
-                      </div>
-                    </label>
-                    <label class="field">
-                      <span class="field-title">Artefacts (sans RRR)</span>
-                      <div class="input-wrap has-suffix">
-                        <input id="craft-mat-art" type="number" min="0" step="100" value="85000" required />
-                        <span class="input-suffix currency-silver">Ag</span>
-                      </div>
-                    </label>
-                  </div>
+                <div class="form-row form-row-2">
+                  <label class="field">
+                    <span class="field-title">Ressources soumises au RRR / u</span>
+                    <div class="input-wrap has-suffix">
+                      <input id="craft-mat-ret" type="number" min="0" step="100" value="288400" required />
+                      <span class="input-suffix currency-silver">Ag</span>
+                    </div>
+                  </label>
+                  <label class="field">
+                    <span class="field-title">Artefacts &amp; cœurs (0% RRR) / u</span>
+                    <div class="input-wrap has-suffix">
+                      <input id="craft-mat-art" type="number" min="0" step="100" value="85000" required />
+                      <span class="input-suffix currency-silver">Ag</span>
+                    </div>
+                  </label>
                 </div>
 
                 <div class="craft-toggles">
                   <label class="toggle-chip">
                     <input id="craft-premium" type="checkbox" checked />
                     <span class="toggle-box"></span>
-                    <span class="toggle-label">Compte Premium <strong>(Taxe 4%)</strong></span>
+                    <span class="toggle-label">Premium <strong>(taxe 4% au lieu de 8%)</strong></span>
                   </label>
                   <label class="toggle-chip">
                     <input id="craft-sell-order" type="checkbox" checked />
                     <span class="toggle-box"></span>
-                    <span class="toggle-label">Ordre de vente <strong>(+2,5%)</strong></span>
+                    <span class="toggle-label">Ordre de vente <strong>(+2,5% frais)</strong></span>
                   </label>
                 </div>
               </form>
+
               <div id="craft-result" class="craft-result"></div>
             </div>
 
             <!-- Market Price Fetcher & Live Captures -->
-            <div class="card market-card">
-              <div class="card-header">
+            <div class="panel market-card">
+              <div class="panel-header">
                 <div>
-                  <h2>Prix Albion Data Project &amp; Arbitrage</h2>
-                  <span class="sub-label">Cotations multi-cités et suivi des opportunités</span>
+                  <h2>Cotations Albion Data &amp; Arbitrage</h2>
+                  <span class="sub-label">Comparaison inter-cités et pré-remplissage craft</span>
                 </div>
                 <div class="inline-controls">
                   <select id="market-region" class="select-input" aria-label="Serveur Albion Data Project">
-                    <option value="europe">🌍 Serveur Europe</option>
-                    <option value="west">🌎 Serveur Amériques</option>
-                    <option value="east">🌏 Serveur Asie</option>
+                    <option value="europe">Europe</option>
+                    <option value="west">Amériques</option>
+                    <option value="east">Asie</option>
                   </select>
-                  <button id="btn-fetch-prices" class="btn btn-primary" type="button">
-                    🌐 Actualiser Prix API
+                  <button id="btn-fetch-prices" class="btn btn-primary btn-sm" type="button">
+                    <svg class="ico"><use href="#ico-refresh"></use></svg>
+                    <span>Actualiser</span>
                   </button>
                 </div>
               </div>
+
               <div class="market-search-bar">
                 <div class="market-search-field">
-                  <span class="search-field-icon" aria-hidden="true">🔍</span>
-                  <input id="market-search-input" type="text" placeholder="Rechercher un objet (ex: Sanctificateur, Lames, T8_BAG)…" autocomplete="off" spellcheck="false" aria-label="Rechercher un objet à suivre" />
-                  <button id="market-search-clear" class="search-clear-btn" type="button" title="Effacer la recherche" hidden>✕</button>
+                  <svg class="ico search-field-icon" aria-hidden="true"><use href="#ico-search"></use></svg>
+                  <input
+                    id="market-search-input"
+                    type="text"
+                    placeholder="Rechercher un objet (Sanctificateur, Lames, T8_BAG)…"
+                    autocomplete="off"
+                    spellcheck="false"
+                    aria-label="Rechercher un objet à suivre"
+                  />
+                  <button id="market-search-clear" class="search-clear-btn" type="button" title="Effacer la recherche" hidden>
+                    <svg class="ico"><use href="#ico-close"></use></svg>
+                  </button>
                   <div id="market-search-results" class="search-dropdown" hidden></div>
                 </div>
-                <button id="btn-price-session" class="btn btn-secondary" type="button" title="Évaluer le butin et la récolte de la session aux prix réels du marché">
-                  🎒 Valoriser Session
+                <button
+                  id="btn-price-session"
+                  class="btn btn-secondary btn-sm"
+                  type="button"
+                  title="Évaluer le butin et la récolte de la session aux prix réels du marché"
+                >
+                  <svg class="ico"><use href="#ico-loot"></use></svg>
+                  <span>Valoriser session</span>
                 </button>
               </div>
+
               <div id="session-valuation-banner" class="valuation-banner" hidden></div>
               <div id="api-price-rows" class="table-wrap"></div>
-              <div class="card-subheader">
-                <h3 class="sub-heading">Ordres du Marché &amp; Courriers Capturés en Jeu</h3>
+
+              <div class="panel-subheader">
+                <h3 class="sub-heading">Ordres &amp; Courriers Capturés en Jeu</h3>
                 <span id="market-orders-badge" class="badge-subtle">0 capture</span>
               </div>
               <div id="captured-market-rows" class="table-wrap"></div>

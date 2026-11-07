@@ -217,22 +217,133 @@ export const summarizeMarketPrices = (rows = []) => {
   return out;
 };
 
-export const buildAlbionItemIconUrl = (uniqueName, size = 40) => {
+export const buildAlbionItemIconUrl = (uniqueName, size = 128) => {
   const clean = String(uniqueName ?? "").trim();
   if (!clean || clean === "UNARMED" || clean === "SILVER" || clean.startsWith("ITEM_")) {
     return null;
   }
-  const px = Math.max(16, Math.min(217, Math.round(Number(size) || 40)));
-  return `https://render.albiononline.com/v1/item/${encodeURIComponent(clean)}.png?size=${px}`;
+  const px = Math.max(16, Math.min(217, Math.round(Number(size) || 128)));
+  const encodedId = encodeURIComponent(clean).replace(/%40/g, "@");
+  return `https://render.albiononline.com/v1/item/${encodedId}.png?size=${px}`;
 };
 
-export const buildAlbionSpellIconUrl = (uniqueName, size = 36) => {
+export const buildAlbionItemIconCandidates = (uniqueName, size = 128) => {
   const clean = String(uniqueName ?? "").trim();
-  if (!clean || /^SPELL_\d+$/.test(clean) || clean === "UNKNOWN") {
+  if (!clean || clean === "UNARMED" || clean === "SILVER" || clean.startsWith("ITEM_")) {
+    return [];
+  }
+  const px = Math.max(16, Math.min(217, Math.round(Number(size) || 128)));
+  const encodedId = encodeURIComponent(clean).replace(/%40/g, "@");
+  const urls = [
+    `https://render.albiononline.com/v1/item/${encodedId}.png?size=${px}`,
+    `https://render.albiononline.com/v1/item/${encodedId}.png`,
+  ];
+  const atIdx = clean.lastIndexOf("@");
+  if (atIdx > 0) {
+    const baseRaw = clean.slice(0, atIdx);
+    const enchRaw = clean.slice(atIdx + 1);
+    const encodedBase = encodeURIComponent(baseRaw);
+    if (/^\d+$/.test(enchRaw) && Number(enchRaw) > 0) {
+      urls.push(`https://render.albiononline.com/v1/item/${encodedBase}.png?enchantment=${enchRaw}&size=${px}`);
+    }
+    urls.push(`https://render.albiononline.com/v1/item/${encodedBase}.png`);
+  }
+  return [...new Set(urls)];
+};
+
+export const buildAlbionSpellIconUrl = (uniqueName, size = 64) => {
+  const clean = String(uniqueName ?? "").trim();
+  if (!clean || /^SPELL_\d+$/.test(clean) || clean === "UNKNOWN" || clean === "AUTO_ATTACK") {
     return null;
   }
-  const px = Math.max(16, Math.min(217, Math.round(Number(size) || 36)));
+  const px = Math.max(16, Math.min(217, Math.round(Number(size) || 64)));
   return `https://render.albiononline.com/v1/spell/${encodeURIComponent(clean)}.png?size=${px}`;
+};
+
+export const buildAlbionSpellIconCandidates = (spell, size = 64) => {
+  const obj = typeof spell === "string" ? { uniqueName: spell } : spell || {};
+  const uniqueName = String(obj.uniqueName ?? "").trim();
+  const uiSprite = String(obj.uiSprite ?? "").trim();
+  const rawNameEn = String(obj.nameEn ?? "").trim();
+
+  if (uniqueName === "AUTO_ATTACK") {
+    return [];
+  }
+
+  const px = Math.max(16, Math.min(217, Math.round(Number(size) || 64)));
+  const urls = [];
+
+  if (uiSprite && uiSprite !== "UNKNOWN") {
+    const encSprite = encodeURIComponent(uiSprite);
+    urls.push(`https://render.albiononline.com/v1/spell/${encSprite}.png?size=${px}`);
+    urls.push(`https://render.albiononline.com/v1/spell/${encSprite}.png`);
+  }
+
+  const cleanNameEn = rawNameEn.replace(/\s*\([^)]*\)\s*$/g, "").trim();
+  if (
+    cleanNameEn &&
+    cleanNameEn.toLowerCase() !== "auto attack" &&
+    !/^spell\s*#\d+$/i.test(cleanNameEn)
+  ) {
+    const encEn = encodeURIComponent(cleanNameEn);
+    urls.push(`https://render.albiononline.com/v1/spell/${encEn}.png?locale=en&size=${px}`);
+    urls.push(`https://render.albiononline.com/v1/spell/${encEn}.png?locale=en`);
+  }
+
+  if (uniqueName && !/^SPELL_\d+$/.test(uniqueName) && uniqueName !== "UNKNOWN") {
+    const encUnique = encodeURIComponent(uniqueName);
+    urls.push(`https://render.albiononline.com/v1/spell/${encUnique}.png?size=${px}`);
+    urls.push(`https://render.albiononline.com/v1/spell/${encUnique}.png`);
+  }
+
+  return [...new Set(urls)];
+};
+
+const ARTEFACT_MARKERS = [
+  "_HELL",
+  "_KEEPER",
+  "_MORGANA",
+  "_UNDEAD",
+  "_AVALON",
+  "_FEY",
+  "_CRYSTAL",
+  "_FW_",
+  "_INSIGHT",
+];
+
+export const estimateCraftingDefaults = (uniqueName, sellPrice = 0, itemValue = 0) => {
+  const clean = String(uniqueName ?? "").trim().toUpperCase();
+  const { tier } = parseItemTierAndEnchantment(clean);
+  const isArtefact = ARTEFACT_MARKERS.some((marker) => clean.includes(marker));
+  const refPrice = Math.max(0, Number(sellPrice) || (Number(itemValue) || 0) * 16);
+  const roundStep = (v) => (v >= 1000 ? Math.round(v / 100) * 100 : Math.round(v));
+
+  const returnableCost = isArtefact ? roundStep(refPrice * 0.52) : roundStep(refPrice * 0.76);
+  const artefactCost = isArtefact ? roundStep(refPrice * 0.24) : 0;
+
+  const nonJournalItem =
+    clean.includes("_POTION_") ||
+    clean.includes("_MEAL_") ||
+    clean.includes("_MOUNT_") ||
+    clean.includes("_WOOD") ||
+    clean.includes("_ORE") ||
+    clean.includes("_FIBER") ||
+    clean.includes("_HIDE") ||
+    clean.includes("_ROCK") ||
+    clean.includes("_FISH");
+
+  let journalProfit = 0;
+  if (!nonJournalItem && refPrice > 0) {
+    const t = tier || 6;
+    journalProfit = t >= 8 ? 22000 : t === 7 ? 12500 : t === 6 ? 5500 : 2000;
+  }
+
+  return {
+    isArtefact,
+    returnableCost,
+    artefactCost,
+    journalProfit,
+  };
 };
 
 const isPriceableUniqueName = (name) =>

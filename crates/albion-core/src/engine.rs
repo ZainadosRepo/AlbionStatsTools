@@ -27,6 +27,8 @@ pub struct SpellStat {
     pub name_fr: String,
     pub name_en: String,
     pub category: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_sprite: Option<String>,
     pub ticks: u32,
     pub damage: i64,
     pub heal: i64,
@@ -1594,6 +1596,7 @@ impl AnalyzerEngine {
                     let category = meta
                         .map(|s| s.category.clone())
                         .unwrap_or_else(|| "damage".into());
+                    let ui_sprite = meta.and_then(|s| s.ui_sprite.clone());
                     let combined = (acc.damage + acc.heal) as f64;
                     SpellStat {
                         spell_index: sp_idx,
@@ -1601,6 +1604,7 @@ impl AnalyzerEngine {
                         name_fr,
                         name_en,
                         category,
+                        ui_sprite,
                         ticks: acc.ticks,
                         damage: acc.damage,
                         heal: acc.heal,

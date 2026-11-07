@@ -1,6 +1,6 @@
 [package]
 name = "albion-stats"
-version = "0.3.1"
+version = "0.4.0"
 description = "Real-time Albion Online combat meter, session tracker, dungeon & gathering telemetry, and crafting calculator"
 authors = ["ZainadosRepo"]
 edition = "2021"
