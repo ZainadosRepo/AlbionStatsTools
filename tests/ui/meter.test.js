@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildAlbionDataPriceUrl,
+  buildAlbionItemIconCandidates,
   buildAlbionItemIconUrl,
+  buildAlbionSpellIconCandidates,
   buildAlbionSpellIconUrl,
   collectSessionPriceableItems,
   computeSessionMarketValue,
+  estimateCraftingDefaults,
   formatDuration,
   formatExactInt,
   formatMeterClipboard,
@@ -120,25 +123,53 @@ test("buildAlbionDataPriceUrl and summarizeMarketPrices compute arbitrage spread
   assert.equal(summary[0].spreadSilver, 35000);
 });
 
-test("buildAlbionItemIconUrl builds official render URLs and ignores placeholders", () => {
+test("buildAlbionItemIconUrl builds official render URLs with literal @ and fallback candidates", () => {
   assert.equal(
     buildAlbionItemIconUrl("T8_2H_BOW_AVALON@2", 48),
-    "https://render.albiononline.com/v1/item/T8_2H_BOW_AVALON%402.png?size=48",
+    "https://render.albiononline.com/v1/item/T8_2H_BOW_AVALON@2.png?size=48",
   );
+  const candidates = buildAlbionItemIconCandidates("T8_2H_BOW_AVALON@2", 128);
+  assert.equal(candidates[0], "https://render.albiononline.com/v1/item/T8_2H_BOW_AVALON@2.png?size=128");
+  assert.ok(candidates.includes("https://render.albiononline.com/v1/item/T8_2H_BOW_AVALON.png"));
   assert.equal(buildAlbionItemIconUrl("UNARMED"), null);
   assert.equal(buildAlbionItemIconUrl("SILVER"), null);
   assert.equal(buildAlbionItemIconUrl("ITEM_9999"), null);
   assert.equal(buildAlbionItemIconUrl(""), null);
 });
 
-test("buildAlbionSpellIconUrl builds official spell render URLs and ignores placeholders", () => {
+test("buildAlbionSpellIconUrl and buildAlbionSpellIconCandidates prioritize uisprite and locale=en", () => {
   assert.equal(
     buildAlbionSpellIconUrl("HOLYSTAFF_HEAL_BURST", 32),
     "https://render.albiononline.com/v1/spell/HOLYSTAFF_HEAL_BURST.png?size=32",
   );
+  assert.equal(buildAlbionSpellIconUrl("AUTO_ATTACK"), null);
   assert.equal(buildAlbionSpellIconUrl("SPELL_4521"), null);
   assert.equal(buildAlbionSpellIconUrl(""), null);
   assert.equal(buildAlbionSpellIconUrl(null), null);
+
+  const spellUrls = buildAlbionSpellIconCandidates(
+    {
+      uniqueName: "CHAIN_LIGHTNING_CAPE",
+      nameEn: "Chain Lightning (Thetford)",
+      uiSprite: "CAPE_THETFORD_LIGHTNING",
+    },
+    64,
+  );
+  assert.equal(spellUrls[0], "https://render.albiononline.com/v1/spell/CAPE_THETFORD_LIGHTNING.png?size=64");
+  assert.ok(spellUrls.includes("https://render.albiononline.com/v1/spell/Chain%20Lightning.png?locale=en&size=64"));
+  assert.deepEqual(buildAlbionSpellIconCandidates({ uniqueName: "AUTO_ATTACK", nameEn: "Auto Attack" }), []);
+});
+
+test("estimateCraftingDefaults separates artefact items from standard items", () => {
+  const artefact = estimateCraftingDefaults("T8_MAIN_NATURESTAFF_KEEPER@1", 1000000, 2560);
+  assert.equal(artefact.isArtefact, true);
+  assert.ok(artefact.artefactCost > 0);
+  assert.ok(artefact.returnableCost > 0);
+
+  const standard = estimateCraftingDefaults("T8_BAG", 200000, 2400);
+  assert.equal(standard.isArtefact, false);
+  assert.equal(standard.artefactCost, 0);
+  assert.ok(standard.returnableCost > 0);
 });
 
 test("collectSessionPriceableItems aggregates loot and gathering quantities", () => {

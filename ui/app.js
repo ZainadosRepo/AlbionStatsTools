@@ -1,9 +1,10 @@
 import {
   buildAlbionDataPriceUrl,
-  buildAlbionItemIconUrl,
-  buildAlbionSpellIconUrl,
+  buildAlbionItemIconCandidates,
+  buildAlbionSpellIconCandidates,
   collectSessionPriceableItems,
   computeSessionMarketValue,
+  estimateCraftingDefaults,
   formatDuration,
   formatExactInt,
   formatMeterClipboard,
@@ -33,7 +34,23 @@ let toastTimer = null;
 let searchTimer = null;
 let searchSeq = 0;
 let lastPriceRows = [];
+let browserMaximizedFallback = false;
 const itemInfoCache = new Map();
+
+const SLOT_LABELS_FR = {
+  mainHand: "Arme",
+  offHand: "Main G.",
+  head: "Tête",
+  chest: "Torse",
+  shoes: "Pieds",
+  bag: "Sac",
+  cape: "Cape",
+  mount: "Monture",
+  potion: "Potion",
+  food: "Repas",
+  resource: "Ressource",
+  material: "Matériau",
+};
 
 const el = (id) => document.getElementById(id);
 
@@ -55,38 +72,158 @@ const escapeHtml = (str) =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 
+const inferItemFallbackGlyph = (uniqueName, slotHint = "") => {
+  const clean = String(uniqueName ?? "").toUpperCase();
+  const slot = String(slotHint ?? "");
+  if (clean === "SILVER") return "ico-slot-silver";
+  if (
+    slot === "head" ||
+    slot === "chest" ||
+    slot === "shoes" ||
+    slot === "cape" ||
+    clean.includes("_HEAD_") ||
+    clean.includes("_ARMOR_") ||
+    clean.includes("_SHOES_") ||
+    clean.includes("_CAPE")
+  ) {
+    return "ico-slot-armor";
+  }
+  if (slot === "bag" || clean.includes("_BAG")) return "ico-slot-bag";
+  if (
+    slot === "potion" ||
+    slot === "food" ||
+    clean.includes("_POTION_") ||
+    clean.includes("_MEAL_")
+  ) {
+    return "ico-slot-potion";
+  }
+  if (
+    slot === "resource" ||
+    slot === "material" ||
+    clean.includes("_WOOD") ||
+    clean.includes("_ORE") ||
+    clean.includes("_FIBER") ||
+    clean.includes("_HIDE") ||
+    clean.includes("_ROCK") ||
+    clean.includes("_FISH") ||
+    clean.includes("_RUNE") ||
+    clean.includes("_SOUL") ||
+    clean.includes("_RELIC")
+  ) {
+    return "ico-slot-resource";
+  }
+  return "ico-slot-weapon";
+};
+
+const inferSpellFallbackGlyph = (uniqueName, category = "") => {
+  const clean = String(uniqueName ?? "").toUpperCase();
+  const cat = String(category ?? "").toLowerCase();
+  if (clean === "AUTO_ATTACK" || cat === "attack") return "ico-spell-attack";
+  if (cat === "heal") return "ico-spell-heal";
+  if (cat === "buff") return "ico-spell-buff";
+  return "ico-spell-damage";
+};
+
+// Global CSP-compliant capture-phase media fallback handler (replaces blocked inline onerror)
+document.addEventListener(
+  "error",
+  (ev) => {
+    const target = ev.target;
+    if (!(target instanceof HTMLImageElement) || !target.classList.contains("slot-img")) {
+      return;
+    }
+    const rawFallbacks = target.getAttribute("data-fallbacks") || "";
+    const remaining = rawFallbacks.split("|").filter(Boolean);
+    if (remaining.length > 0) {
+      const nextUrl = remaining.shift();
+      target.setAttribute("data-fallbacks", remaining.join("|"));
+      target.src = nextUrl;
+      return;
+    }
+    target.hidden = true;
+    target.closest(".icon-slot")?.classList.add("is-fallback");
+  },
+  true,
+);
+
 const renderCityBadge = (cityName) => {
   const info = getCityBadgeInfo(cityName);
   if (!info) return `<span class="dash-empty">—</span>`;
-  return `<span class="city-pill city-${info.key}">${info.icon} ${escapeHtml(info.label)}</span>`;
+  return `<span class="city-pill city-${info.key}"><span class="city-dot"></span>${escapeHtml(info.label)}</span>`;
 };
 
-const renderItemThumb = (uniqueName, size = 36, cls = "item-icon-sm") => {
-  const url = buildAlbionItemIconUrl(uniqueName, size);
-  if (!url) return "";
-  return `<img class="${cls}" src="${escapeHtml(url)}" alt="" loading="lazy" onerror="this.hidden=true" />`;
-};
-
-const renderItemThumbWithTier = (uniqueName, size = 38) => {
-  const url = buildAlbionItemIconUrl(uniqueName, size);
-  if (!url) return "";
-  const meta = parseItemTierAndEnchantment(uniqueName);
-  const tierCls = meta.tier ? `tier-box-${meta.tier}` : "";
-  const tierBadge = meta.label ? `<span class="tier-chip ${meta.tier ? `tier-${meta.tier}` : ""}">${meta.label}</span>` : "";
-  const enchBadge = meta.enchantment > 0 ? `<span class="ench-dot ench-${meta.enchantment}" title="Enchantement .${meta.enchantment}"></span>` : "";
+const renderItemThumb = (uniqueName, cls = "icon-slot-sm", slotHint = "") => {
+  const candidates = buildAlbionItemIconCandidates(uniqueName, 128);
+  const glyph = inferItemFallbackGlyph(uniqueName, slotHint);
+  if (candidates.length === 0) {
+    return `
+      <span class="icon-slot ${cls} is-fallback" aria-hidden="true">
+        <svg class="slot-fallback-svg"><use href="#${glyph}"></use></svg>
+      </span>
+    `;
+  }
+  const [primary, ...fallbacks] = candidates;
   return `
-    <div class="item-thumb-box ${tierCls}">
-      <img class="item-thumb-img" src="${escapeHtml(url)}" alt="" loading="lazy" onerror="this.hidden=true" />
-      ${tierBadge}
-      ${enchBadge}
-    </div>
+    <span class="icon-slot ${cls}">
+      <svg class="slot-fallback-svg" aria-hidden="true"><use href="#${glyph}"></use></svg>
+      <img class="slot-img" src="${escapeHtml(primary)}" data-fallbacks="${escapeHtml(fallbacks.join("|"))}" alt="" loading="lazy" decoding="async" />
+    </span>
   `;
 };
 
-const renderSpellThumb = (uniqueName, size = 32) => {
-  const url = buildAlbionSpellIconUrl(uniqueName, size);
-  if (!url) return "";
-  return `<img class="item-icon-sm" src="${escapeHtml(url)}" alt="" loading="lazy" onerror="this.hidden=true" />`;
+const renderItemThumbWithTier = (uniqueName, slotHint = "") => {
+  const candidates = buildAlbionItemIconCandidates(uniqueName, 128);
+  const glyph = inferItemFallbackGlyph(uniqueName, slotHint);
+  const meta = parseItemTierAndEnchantment(uniqueName);
+  const tierCls = meta.tier ? `tier-box-${meta.tier}` : "";
+  const tierBadge = meta.label
+    ? `<span class="tier-chip ${meta.tier ? `tier-${meta.tier}` : ""}">${meta.label}</span>`
+    : "";
+  const enchBadge =
+    meta.enchantment > 0
+      ? `<span class="ench-dot ench-${meta.enchantment}" title="Enchantement .${meta.enchantment}"></span>`
+      : "";
+
+  if (candidates.length === 0) {
+    return `
+      <span class="icon-slot item-thumb-box ${tierCls} is-fallback">
+        <svg class="slot-fallback-svg" aria-hidden="true"><use href="#${glyph}"></use></svg>
+        ${tierBadge}
+        ${enchBadge}
+      </span>
+    `;
+  }
+  const [primary, ...fallbacks] = candidates;
+  return `
+    <span class="icon-slot item-thumb-box ${tierCls}">
+      <svg class="slot-fallback-svg" aria-hidden="true"><use href="#${glyph}"></use></svg>
+      <img class="slot-img item-thumb-img" src="${escapeHtml(primary)}" data-fallbacks="${escapeHtml(fallbacks.join("|"))}" alt="" loading="lazy" decoding="async" />
+      ${tierBadge}
+      ${enchBadge}
+    </span>
+  `;
+};
+
+const renderSpellThumb = (spell) => {
+  const obj = typeof spell === "string" ? { uniqueName: spell } : spell || {};
+  const candidates = buildAlbionSpellIconCandidates(obj, 64);
+  const glyph = inferSpellFallbackGlyph(obj.uniqueName, obj.category);
+  const catCls = `spell-cat-${escapeHtml(String(obj.category || "damage").toLowerCase())}`;
+
+  if (candidates.length === 0) {
+    return `
+      <span class="icon-slot icon-slot-sm ${catCls} is-fallback" aria-hidden="true">
+        <svg class="slot-fallback-svg"><use href="#${glyph}"></use></svg>
+      </span>
+    `;
+  }
+  const [primary, ...fallbacks] = candidates;
+  return `
+    <span class="icon-slot icon-slot-sm ${catCls}">
+      <svg class="slot-fallback-svg" aria-hidden="true"><use href="#${glyph}"></use></svg>
+      <img class="slot-img" src="${escapeHtml(primary)}" data-fallbacks="${escapeHtml(fallbacks.join("|"))}" alt="" loading="lazy" decoding="async" />
+    </span>
+  `;
 };
 
 const persistSettings = async () => {
@@ -104,7 +241,42 @@ const applyOverlayOpacity = () => {
   if (slider && Number(slider.value) !== settings.overlayOpacity) {
     slider.value = String(settings.overlayOpacity);
   }
-  if (slider) slider.title = `Opacité de la fenêtre overlay (${settings.overlayOpacity}%)`;
+  if (slider) slider.title = `Opacité de la fenêtre (${settings.overlayOpacity}%)`;
+};
+
+const syncMaximizedState = async () => {
+  let isMax = browserMaximizedFallback;
+  if (tauriWindow?.isMaximized) {
+    try {
+      isMax = Boolean(await tauriWindow.isMaximized());
+    } catch {
+      // Ignore if permission or context is unavailable
+    }
+  }
+  el("app")?.classList.toggle("is-maximized", isMax);
+  const maxBtn = el("btn-max");
+  const maxUse = el("btn-max-use");
+  if (maxBtn) {
+    const label = isMax ? "Restaurer la fenêtre" : "Agrandir la fenêtre";
+    maxBtn.title = label;
+    maxBtn.setAttribute("aria-label", label);
+  }
+  if (maxUse) {
+    maxUse.setAttribute("href", isMax ? "#ico-restore" : "#ico-max");
+  }
+};
+
+const toggleMaximizeWindow = async () => {
+  if (tauriWindow?.toggleMaximize) {
+    try {
+      await tauriWindow.toggleMaximize();
+    } catch (e) {
+      console.warn("toggleMaximize:", e);
+    }
+  } else {
+    browserMaximizedFallback = !browserMaximizedFallback;
+  }
+  await syncMaximizedState();
 };
 
 const applyWindowPreferences = async () => {
@@ -120,6 +292,7 @@ const applyWindowPreferences = async () => {
       console.warn("setAlwaysOnTop:", e);
     }
   }
+  await syncMaximizedState();
 };
 
 const activeMeterDataset = () => {
@@ -166,7 +339,7 @@ const renderHeader = () => {
   if (badge && cap) {
     const isLive = cap.mode === "rawSocket";
     badge.className = `status-badge ${isLive ? "status-live" : "status-standby"}`;
-    badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">${isLive ? "Capture UDP 5056" : "Prêt / Simulateur"}</span>`;
+    badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">${isLive ? "UDP 5056" : "Simulateur"}</span>`;
     badge.title = cap.detail || "";
   }
 
@@ -180,7 +353,7 @@ const renderHeader = () => {
     catCount.textContent = formatExactInt(snap.catalogItemCount);
     const syncBtn = el("btn-sync-catalog");
     if (syncBtn) {
-      syncBtn.title = `Catalogue : ${formatExactInt(snap.catalogItemCount)} objets • ${formatExactInt(snap.catalogSpellCount || 0)} sorts — cliquer pour synchroniser ao-bin-dumps (objets + zones + sorts)`;
+      syncBtn.title = `Catalogue : ${formatExactInt(snap.catalogItemCount)} objets • ${formatExactInt(snap.catalogSpellCount || 0)} sorts — cliquer pour synchroniser ao-bin-dumps`;
     }
   }
 
@@ -195,7 +368,9 @@ const renderHeader = () => {
   const rawName = String(lp.username || "En attente…");
   const displayName = rawName.startsWith("En attente") ? "En attente…" : `${rawName}${guildTag}`;
   el("header-player-name").textContent = displayName;
+  el("header-player-name").title = displayName;
   el("header-map-name").textContent = lp.currentMapNameFr || "Caerleon";
+  el("header-map-name").title = lp.currentMapNameFr || "Caerleon";
   el("header-silver").textContent = `${formatExactInt(lp.silver)} Ag`;
 };
 
@@ -206,9 +381,9 @@ const renderSnapshotSelect = () => {
   if (!select) return;
 
   const prev = selectedSnapshotId;
-  let html = `<option value="live">🔴 Combat en direct</option>`;
+  let html = `<option value="live">Combat en direct</option>`;
   for (const s of snaps) {
-    html += `<option value="${escapeHtml(s.id)}">📸 ${escapeHtml(s.label)}</option>`;
+    html += `<option value="${escapeHtml(s.id)}">${escapeHtml(s.label)}</option>`;
   }
   select.innerHTML = html;
   if (snaps.some((s) => s.id === prev)) {
@@ -232,8 +407,8 @@ const renderCombatTab = () => {
   const ranked = rankMeterPlayers(data.players, settings.meterMode);
   const container = el("meter-rows");
   if (ranked.length === 0) {
-    container.innerHTML = `<div class="empty-state">Aucun combat actif. Lancez Albion Online ou cliquez sur <strong>⚡ Simuler Session</strong> pour tester le compteur.</div>`;
-    el("spell-rows").innerHTML = `<div class="empty-state">Sélectionnez un joueur pour inspecter ses sorts.</div>`;
+    container.innerHTML = `<div class="empty-state">Aucun combat actif. Lancez Albion Online ou cliquez sur <strong>Simuler</strong> pour tester le compteur.</div>`;
+    el("spell-rows").innerHTML = `<div class="empty-state">Sélectionnez un joueur pour inspecter la répartition de ses sorts.</div>`;
     return;
   }
 
@@ -244,24 +419,18 @@ const renderCombatTab = () => {
   container.innerHTML = ranked
     .map((p) => {
       const isSel = p.name === selectedPlayerName;
-      const weaponThumb = renderItemThumb(p.weaponUniqueName, 44, "item-icon");
-      const rankBadge =
-        p.rank === 1
-          ? `<span class="meter-rank rank-1" title="1er">🥇</span>`
-          : p.rank === 2
-            ? `<span class="meter-rank rank-2" title="2e">🥈</span>`
-            : p.rank === 3
-              ? `<span class="meter-rank rank-3" title="3e">🥉</span>`
-              : `<span class="meter-rank">#${p.rank}</span>`;
+      const weaponThumb = renderItemThumb(p.weaponUniqueName, "icon-slot-md", "mainHand");
+      const rankCls = p.rank <= 3 ? `rank-${p.rank}` : "";
+      const rankLabel = String(p.rank).padStart(2, "0");
       return `
         <div class="meter-row ${isSel ? "selected" : ""}" data-player-name="${escapeHtml(p.name)}">
           <div class="meter-bar-fill meter-bar-${escapeHtml(settings.meterMode)}" style="width: ${p.barPercent.toFixed(1)}%"></div>
           <div class="meter-row-content">
             <div class="meter-left">
-              ${rankBadge}
+              <span class="meter-rank ${rankCls}">${rankLabel}</span>
               ${weaponThumb}
               <div class="meter-ident">
-                <span class="meter-name">${escapeHtml(p.name)} ${p.isSelf ? "★" : ""}</span>
+                <span class="meter-name">${escapeHtml(p.name)}${p.isSelf ? `<span class="self-tag">VOUS</span>` : ""}</span>
                 <span class="meter-weapon">${escapeHtml(p.weaponNameFr)}</span>
               </div>
             </div>
@@ -295,11 +464,11 @@ const renderCombatTab = () => {
         <thead>
           <tr>
             <th>Sort</th>
-            <th>Ticks</th>
-            <th>Dégâts</th>
-            <th>Soins</th>
-            <th>Overheal</th>
-            <th>Part</th>
+            <th class="num-col" title="Nombre de ticks / coups enregistrés">Coups</th>
+            <th class="num-col">Dégâts</th>
+            <th class="num-col col-optional">Soins</th>
+            <th class="num-col col-optional">Overheal</th>
+            <th class="num-col">Part</th>
           </tr>
         </thead>
         <tbody>
@@ -309,15 +478,15 @@ const renderCombatTab = () => {
             <tr>
               <td>
                 <span class="cell-with-icon" title="${escapeHtml(s.uniqueName)}">
-                  ${renderSpellThumb(s.uniqueName, 32)}
-                  <strong>${escapeHtml(s.nameFr)}</strong>
+                  ${renderSpellThumb(s)}
+                  <strong class="truncate-text">${escapeHtml(s.nameFr)}</strong>
                 </span>
               </td>
-              <td>${s.ticks}</td>
-              <td>${formatExactInt(s.damage)}</td>
-              <td>${formatExactInt(s.heal)}</td>
-              <td>${formatExactInt(s.overhealed)}</td>
-              <td>${s.sharePercent.toFixed(1)}%</td>
+              <td class="num-col mono">${s.ticks}</td>
+              <td class="num-col mono">${formatExactInt(s.damage)}</td>
+              <td class="num-col mono col-optional">${formatExactInt(s.heal)}</td>
+              <td class="num-col mono col-optional">${formatExactInt(s.overhealed)}</td>
+              <td class="num-col mono text-accent">${s.sharePercent.toFixed(1)}%</td>
             </tr>
           `,
             )
@@ -363,9 +532,9 @@ const renderSessionTab = () => {
       <thead>
         <tr>
           <th>Cité de Faction</th>
-          <th>Jetons Gagnés</th>
-          <th>Points de Rang</th>
-          <th>Points de Drapeau</th>
+          <th class="num-col">Jetons gagnés</th>
+          <th class="num-col">Points de rang</th>
+          <th class="num-col col-optional">Points de drapeau</th>
         </tr>
       </thead>
       <tbody>
@@ -373,10 +542,10 @@ const renderSessionTab = () => {
           .map(
             (f) => `
           <tr>
-            <td><strong>${escapeHtml(f.city)}</strong></td>
-            <td>${formatExactInt(f.coins)}</td>
-            <td>${formatExactInt(f.rankPoints)}</td>
-            <td>${formatExactInt(f.flagPoints)}</td>
+            <td>${renderCityBadge(f.city)}</td>
+            <td class="num-col mono">${formatExactInt(f.coins)}</td>
+            <td class="num-col mono">${formatExactInt(f.rankPoints)}</td>
+            <td class="num-col mono col-optional">${formatExactInt(f.flagPoints)}</td>
           </tr>
         `,
           )
@@ -388,7 +557,7 @@ const renderSessionTab = () => {
 
 const renderDungeonsTab = () => {
   const runs = latestState?.snapshot?.dungeons || [];
-  el("dungeon-count-badge").textContent = `${runs.length} instance(s)`;
+  el("dungeon-count-badge").textContent = `${runs.length} instance${runs.length > 1 ? "s" : ""}`;
   const wrap = el("dungeon-rows");
   if (runs.length === 0) {
     wrap.innerHTML = `<div class="empty-state">Aucun donjon ou brume parcouru durant cette session.</div>`;
@@ -401,12 +570,12 @@ const renderDungeonsTab = () => {
         <tr>
           <th>Instance</th>
           <th>Tier</th>
-          <th>Durée</th>
-          <th>Renommée</th>
-          <th>Fame / h</th>
-          <th>Argent</th>
-          <th>Might / Faveur</th>
-          <th>Coffres / Feux Follets</th>
+          <th class="num-col">Durée</th>
+          <th class="num-col">Renommée</th>
+          <th class="num-col col-optional">Fame / h</th>
+          <th class="num-col">Argent</th>
+          <th class="num-col col-optional">Might / Faveur</th>
+          <th class="num-col col-optional">Coffres / Wisps</th>
         </tr>
       </thead>
       <tbody>
@@ -414,14 +583,19 @@ const renderDungeonsTab = () => {
           .map(
             (d) => `
           <tr>
-            <td><strong>${escapeHtml(d.nameFr)}</strong> ${d.isActive ? '<span class="status-badge status-live">En cours</span>' : ""}</td>
-            <td>T${d.tier}</td>
-            <td>${formatDuration(d.durationSeconds)}</td>
-            <td>${formatNumber(d.fame)}</td>
-            <td>${formatNumber(d.famePerHour)}/h</td>
-            <td>${formatNumber(d.silver)} Ag</td>
-            <td>${formatExactInt(d.might)} / ${formatExactInt(d.favor)}</td>
-            <td>📦 ${d.chestsOpened} • ✨ ${d.cagedWispsOpened}</td>
+            <td>
+              <span class="cell-with-icon">
+                <strong>${escapeHtml(d.nameFr)}</strong>
+                ${d.isActive ? '<span class="status-badge status-live"><span class="badge-dot"></span>En cours</span>' : ""}
+              </span>
+            </td>
+            <td><span class="mono-tag">T${d.tier}</span></td>
+            <td class="num-col mono">${formatDuration(d.durationSeconds)}</td>
+            <td class="num-col mono">${formatNumber(d.fame)}</td>
+            <td class="num-col mono col-optional text-accent">${formatNumber(d.famePerHour)}/h</td>
+            <td class="num-col mono">${formatNumber(d.silver)} Ag</td>
+            <td class="num-col mono col-optional">${formatExactInt(d.might)} / ${formatExactInt(d.favor)}</td>
+            <td class="num-col mono col-optional">${d.chestsOpened} / ${d.cagedWispsOpened}</td>
           </tr>
         `,
           )
@@ -445,7 +619,7 @@ const renderGatheringTab = () => {
 
   const log = snap.gatheringLog || [];
   if (log.length === 0) {
-    el("gathering-rows").innerHTML = `<div class="empty-state">Aucune récolte enregistrée.</div>`;
+    el("gathering-rows").innerHTML = `<div class="empty-state">Aucune récolte enregistrée durant cette session.</div>`;
     return;
   }
 
@@ -455,11 +629,11 @@ const renderGatheringTab = () => {
         <tr>
           <th>Ressource</th>
           <th>Tier</th>
-          <th>Base</th>
-          <th>Bonus Récolteur</th>
-          <th>Bonus Premium</th>
-          <th>Total</th>
-          <th>Valeur Estimée</th>
+          <th class="num-col col-optional">Base</th>
+          <th class="num-col col-optional">Récolteur</th>
+          <th class="num-col col-optional">Premium</th>
+          <th class="num-col">Total</th>
+          <th class="num-col">Estimation</th>
         </tr>
       </thead>
       <tbody>
@@ -469,16 +643,16 @@ const renderGatheringTab = () => {
           <tr>
             <td>
               <span class="cell-with-icon">
-                ${renderItemThumb(g.uniqueName, 36)}
+                ${renderItemThumb(g.uniqueName, "icon-slot-sm", "resource")}
                 <strong>${escapeHtml(g.nameFr)}</strong>
               </span>
             </td>
-            <td>T${g.tier}.${g.enchantment}</td>
-            <td>${g.standardAmount}</td>
-            <td>+${g.collectorBonus}</td>
-            <td>+${g.premiumBonus}</td>
-            <td><strong>${g.totalAmount}</strong></td>
-            <td>${formatExactInt(g.estimatedSilver)} Ag</td>
+            <td><span class="mono-tag">T${g.tier}.${g.enchantment}</span></td>
+            <td class="num-col mono col-optional">${g.standardAmount}</td>
+            <td class="num-col mono col-optional">+${g.collectorBonus}</td>
+            <td class="num-col mono col-optional">+${g.premiumBonus}</td>
+            <td class="num-col mono"><strong>${g.totalAmount}</strong></td>
+            <td class="num-col mono text-accent">${formatExactInt(g.estimatedSilver)} Ag</td>
           </tr>
         `,
           )
@@ -493,30 +667,30 @@ const renderLootAndInspectTab = () => {
   if (!snap) return;
 
   const players = snap.inspectedPlayers || [];
-  el("inspect-count-badge").textContent = `${players.length} joueur(s)`;
+  el("inspect-count-badge").textContent = `${players.length} joueur${players.length > 1 ? "s" : ""}`;
   if (players.length === 0) {
-    el("inspect-cards").innerHTML = `<div class="empty-state">Aucun joueur inspecté.</div>`;
+    el("inspect-cards").innerHTML = `<div class="empty-state">Aucun joueur inspecté à proximité.</div>`;
   } else {
     el("inspect-cards").innerHTML = players
       .map(
         (p) => `
       <div class="inspect-card">
         <div class="inspect-head">
-          <div>
+          <div class="inspect-ident">
             <strong>${escapeHtml(p.name)}</strong>
             ${p.guildName ? `<span class="badge-subtle">[${escapeHtml(p.guildName)}]</span>` : ""}
           </div>
-          <span class="player-map">~${formatNumber(p.estimatedLoadoutValue)} Ag</span>
+          <span class="mono text-accent">~${formatNumber(p.estimatedLoadoutValue)} Ag</span>
         </div>
         <div class="slot-list">
           ${(p.slots || [])
             .map(
               (sl) => `
             <div class="slot-item">
-              <span class="slot-tag">${escapeHtml(sl.slot)}</span>
+              <span class="slot-tag">${escapeHtml(SLOT_LABELS_FR[sl.slot] || sl.slot)}</span>
               <span class="slot-item-val">
-                ${renderItemThumb(sl.uniqueName, 32)}
-                <span>${escapeHtml(sl.nameFr)}</span>
+                ${renderItemThumb(sl.uniqueName, "icon-slot-xs", sl.slot)}
+                <span class="truncate-text">${escapeHtml(sl.nameFr)}</span>
               </span>
             </div>
           `,
@@ -537,11 +711,11 @@ const renderLootAndInspectTab = () => {
       <table class="data-table">
         <thead>
           <tr>
-            <th>Ramassé par</th>
-            <th>Source</th>
+            <th>Joueur</th>
+            <th class="col-optional">Source</th>
             <th>Objet</th>
-            <th>Qté</th>
-            <th>Estimation</th>
+            <th class="num-col">Qté</th>
+            <th class="num-col">Estimation</th>
           </tr>
         </thead>
         <tbody>
@@ -550,15 +724,15 @@ const renderLootAndInspectTab = () => {
               (l) => `
             <tr>
               <td><strong>${escapeHtml(l.lootedBy)}</strong></td>
-              <td>${escapeHtml(l.lootedFrom)}</td>
+              <td class="col-optional text-dim">${escapeHtml(l.lootedFrom)}</td>
               <td>
                 <span class="cell-with-icon">
-                  ${renderItemThumb(l.uniqueName, 36)}
-                  <span>${escapeHtml(l.nameFr)}</span>
+                  ${renderItemThumb(l.uniqueName, "icon-slot-sm")}
+                  <span class="truncate-text">${escapeHtml(l.nameFr)}</span>
                 </span>
               </td>
-              <td>×${l.quantity}</td>
-              <td>${formatExactInt(l.estimatedSilver)} Ag</td>
+              <td class="num-col mono">×${l.quantity}</td>
+              <td class="num-col mono text-accent">${formatExactInt(l.estimatedSilver)} Ag</td>
             </tr>
           `,
             )
@@ -581,9 +755,8 @@ const renderCapturedMarketOrders = () => {
   if (orders.length === 0 && mails.length === 0) {
     el("captured-market-rows").innerHTML = `
       <div class="empty-state empty-market-state">
-        <span class="empty-icon" aria-hidden="true">📜</span>
-        <div class="empty-title">Aucun ordre ou courrier du marché capturé</div>
-        <div class="empty-hint">Consultez l'hôtel des ventes ou ouvrez votre boîte aux lettres en jeu pour capturer automatiquement vos transactions.</div>
+        <div class="empty-title">Aucun ordre ou courrier capturé</div>
+        <div class="empty-hint">Ouvrez l'Hôtel des Ventes ou vos courriers en jeu pour capturer automatiquement vos transactions.</div>
       </div>
     `;
     return;
@@ -595,9 +768,9 @@ const renderCapturedMarketOrders = () => {
         <tr>
           <th>Type</th>
           <th>Objet</th>
-          <th>Qté</th>
-          <th>Prix Unitaire</th>
-          <th>Total</th>
+          <th class="num-col">Qté</th>
+          <th class="num-col col-optional">Prix / u</th>
+          <th class="num-col">Total</th>
         </tr>
       </thead>
       <tbody>
@@ -605,16 +778,16 @@ const renderCapturedMarketOrders = () => {
           .map(
             (o) => `
           <tr>
-            <td><span class="badge-subtle ${o.isRequest ? "badge-buy-order" : "badge-sell-order"}">${o.isRequest ? "Demande d'Achat" : "Vente Q" + o.qualityLevel}</span></td>
+            <td><span class="badge-subtle ${o.isRequest ? "badge-buy-order" : "badge-sell-order"}">${o.isRequest ? "Achat" : "Vente Q" + o.qualityLevel}</span></td>
             <td>
               <span class="cell-with-icon">
-                ${renderItemThumbWithTier(o.itemUniqueName, 36)}
-                <strong>${escapeHtml(o.itemNameFr)}</strong>
+                ${renderItemThumbWithTier(o.itemUniqueName)}
+                <strong class="truncate-text">${escapeHtml(o.itemNameFr)}</strong>
               </span>
             </td>
-            <td><span class="qty-pill">×${o.amount}</span></td>
-            <td><span class="silver-amount">${formatExactInt(o.unitPriceSilver)} <span class="ag-tag">Ag</span></span></td>
-            <td><strong class="silver-amount">${formatExactInt(o.totalPriceSilver)} <span class="ag-tag">Ag</span></strong></td>
+            <td class="num-col mono">×${o.amount}</td>
+            <td class="num-col mono col-optional">${formatExactInt(o.unitPriceSilver)} Ag</td>
+            <td class="num-col mono"><strong>${formatExactInt(o.totalPriceSilver)} Ag</strong></td>
           </tr>
         `,
           )
@@ -623,16 +796,16 @@ const renderCapturedMarketOrders = () => {
           .map(
             (m) => `
           <tr>
-            <td><span class="status-badge status-live">Courrier Vendu</span></td>
+            <td><span class="status-badge status-live"><span class="badge-dot"></span>Vendu</span></td>
             <td>
               <span class="cell-with-icon">
-                ${renderItemThumbWithTier(m.itemUniqueName, 36)}
-                <strong>${escapeHtml(m.itemNameFr)}</strong>
+                ${renderItemThumbWithTier(m.itemUniqueName)}
+                <strong class="truncate-text">${escapeHtml(m.itemNameFr)}</strong>
               </span>
             </td>
-            <td><span class="qty-pill">×${m.amount}</span></td>
-            <td><span class="silver-amount">${formatExactInt(m.unitPriceSilver)} <span class="ag-tag">Ag</span></span></td>
-            <td><strong class="silver-amount text-gold">${formatExactInt(m.totalPriceSilver)} <span class="ag-tag">Ag</span></strong></td>
+            <td class="num-col mono">×${m.amount}</td>
+            <td class="num-col mono col-optional">${formatExactInt(m.unitPriceSilver)} Ag</td>
+            <td class="num-col mono text-accent"><strong>${formatExactInt(m.totalPriceSilver)} Ag</strong></td>
           </tr>
         `,
           )
@@ -646,10 +819,12 @@ const updateCraftingSimulation = async () => {
   const matRetVal = Math.max(0, Number(el("craft-mat-ret")?.value) || 0);
   const matArtVal = Math.max(0, Number(el("craft-mat-art")?.value) || 0);
   const sellVal = Math.max(0, Number(el("craft-sell")?.value) || 0);
+  const itemVal = Math.max(0, Number(el("craft-item-val")?.value) || 0);
+  const feeVal = Math.max(0, Number(el("craft-fee")?.value) || 0);
+  const journalVal = Math.max(0, Number(el("craft-journal")?.value) || 0);
   const qty = Math.max(1, Number(el("craft-qty")?.value) || 1);
   const bonusVal = Math.max(0, Number(el("craft-bonus")?.value) || 0);
 
-  // Sync active state on preset pills
   document.querySelectorAll(".preset-pill[data-preset-bonus]").forEach((b) => {
     const val = Number(b.getAttribute("data-preset-bonus"));
     b.classList.toggle("active", Math.abs(val - bonusVal) < 0.05);
@@ -659,12 +834,12 @@ const updateCraftingSimulation = async () => {
     itemName: el("craft-name")?.value || "Objet",
     craftQuantity: qty,
     sellUnitPrice: sellVal,
-    itemValue: Math.max(0, Number(el("craft-item-val")?.value) || 0),
+    itemValue: itemVal,
     productionBonusPercent: bonusVal,
-    usageFeePer100Nutrition: Math.max(0, Number(el("craft-fee")?.value) || 0),
+    usageFeePer100Nutrition: feeVal,
     isPremium: Boolean(el("craft-premium")?.checked),
     isSellOrder: Boolean(el("craft-sell-order")?.checked),
-    journalProfitPerItem: Math.max(0, Number(el("craft-journal")?.value) || 0),
+    journalProfitPerItem: journalVal,
     materials: [
       {
         name: "Ressources principales",
@@ -685,97 +860,86 @@ const updateCraftingSimulation = async () => {
   if (!res) return;
 
   const isProfitable = res.totalBatchProfit >= 0;
-  const rrrPct = (res.resourceReturnRate * 100).toFixed(2);
-  const totalStationFee = Math.round(res.stationFeePerItem * res.craftQuantity);
-  const totalMarketFee = Math.round(res.marketFeePerItem * res.craftQuantity);
-  const totalGrossRevenue = Math.round(sellVal * res.craftQuantity);
-  const totalNetRevenue = Math.round(res.totalBatchRevenue);
+  const rrrPct = (res.resourceReturnRate * 100).toFixed(2).replace(".", ",");
+  const taxPct = (res.marketTaxRate * 100).toFixed(1).replace(".", ",");
+  const netReturnablePerItem = Math.round(matRetVal * (1 - res.resourceReturnRate));
+  const savedPerItem = Math.round(matRetVal * res.resourceReturnRate);
+  const stationFeePerItem = Math.round(res.stationFeePerItem);
+  const marketFeePerItem = Math.round(res.marketFeePerItem);
   const totalCost = Math.round(res.totalBatchCost);
+  const totalRevenue = Math.round(res.totalBatchRevenue);
   const roiPercent = totalCost > 0 ? (res.totalBatchProfit / totalCost) * 100 : 0;
-  const savedMaterialsAg = Math.round(res.resourceReturnRate * (matRetVal * res.craftQuantity));
 
-  // Stacked breakdown proportions
-  const budgetBase = Math.max(totalGrossRevenue, totalCost + totalStationFee + totalMarketFee, 1);
+  const budgetBase = Math.max(totalRevenue, totalCost, 1);
   const matCostTotal = Math.round(res.netMaterialCostPerItem * res.craftQuantity);
-  const matShare = Math.min(100, Math.max(4, (matCostTotal / budgetBase) * 100));
-  const feeShare = Math.min(100, Math.max(2, ((totalStationFee + totalMarketFee) / budgetBase) * 100));
+  const feeTotal = Math.round((res.stationFeePerItem + res.marketFeePerItem) * res.craftQuantity);
+  const matShare = Math.min(100, Math.max(3, (matCostTotal / budgetBase) * 100));
+  const feeShare = Math.min(100, Math.max(2, (feeTotal / budgetBase) * 100));
   const profitShare = isProfitable ? Math.max(0, Math.min(100, 100 - matShare - feeShare)) : 0;
 
   el("craft-result").innerHTML = `
     <div class="craft-dashboard">
-      <!-- Hero Profit Banner -->
       <div class="craft-hero ${isProfitable ? "is-profit" : "is-loss"}">
         <div class="craft-hero-left">
-          <div class="craft-hero-tag">
+          <span class="craft-hero-tag">
             <span class="hero-dot"></span>
-            PROFIT NET TOTAL (${res.craftQuantity} ${res.craftQuantity > 1 ? "unités" : "unité"})
-          </div>
+            Profit net (${res.craftQuantity} u)
+          </span>
           <div class="craft-hero-main">
             <span class="hero-num">${isProfitable ? "+" : ""}${formatExactInt(res.totalBatchProfit)}</span>
             <span class="hero-unit">Ag</span>
           </div>
           <div class="craft-hero-sub">
-            <span class="chip-unit-profit">${isProfitable ? "+" : ""}${formatExactInt(res.netProfitPerItem)} Ag / u</span>
+            <span class="mono">${isProfitable ? "+" : ""}${formatExactInt(res.netProfitPerItem)} Ag/u</span>
             <span class="hero-sep">•</span>
-            <span class="chip-roi">ROI <strong>${roiPercent >= 0 ? "+" : ""}${roiPercent.toFixed(1)}%</strong></span>
+            <span>ROI <strong class="mono">${roiPercent >= 0 ? "+" : ""}${roiPercent.toFixed(1)}%</strong></span>
+            <span class="hero-sep">•</span>
+            <span>RRR <strong class="mono">${rrrPct}%</strong></span>
           </div>
         </div>
         <div class="craft-hero-badge ${isProfitable ? "badge-profit" : "badge-loss"}">
-          <span class="badge-arb-icon">${isProfitable ? "▲" : "▼"}</span>
           <span class="badge-status-title">${isProfitable ? "RENTABLE" : "DÉFICITAIRE"}</span>
-          <span class="badge-margin-tag">Marge ${res.marginPercent.toFixed(1)}%</span>
+          <span class="badge-margin-tag mono">Marge ${res.marginPercent.toFixed(1)}%</span>
         </div>
       </div>
 
-      <!-- Key Metrics 4-Card Grid -->
-      <div class="craft-kpi-grid">
-        <div class="craft-kpi-item">
-          <div class="kpi-item-head">
-            <span class="kpi-item-label">Taux de Retour (RRR)</span>
-            <span class="kpi-item-badge rrr-badge">${rrrPct}%</span>
-          </div>
-          <div class="rrr-progress-bar">
-            <div class="rrr-progress-fill" style="width: ${Math.min(100, (res.resourceReturnRate / 0.539) * 100).toFixed(1)}%"></div>
-          </div>
-          <div class="kpi-item-foot">Économie mat. : <strong>~${formatExactInt(savedMaterialsAg)} Ag</strong></div>
+      <div class="cost-ledger" aria-label="Détail du calcul du coût unitaire">
+        <div class="ledger-row">
+          <span class="ledger-label">Ressources avec RRR <small>(${formatExactInt(matRetVal)} − ${rrrPct}% = −${formatExactInt(savedPerItem)} Ag)</small></span>
+          <span class="ledger-val mono">${formatExactInt(netReturnablePerItem)} Ag</span>
         </div>
-
-        <div class="craft-kpi-item">
-          <div class="kpi-item-head">
-            <span class="kpi-item-label">Coût de Revient / u</span>
-            <span class="kpi-item-val">${formatExactInt(res.totalCostPerItem)} Ag</span>
-          </div>
-          <div class="kpi-item-foot">Coût total lot : <strong>${formatExactInt(totalCost)} Ag</strong></div>
+        <div class="ledger-row">
+          <span class="ledger-label">Artefacts &amp; cœurs <small>(sans retour RRR)</small></span>
+          <span class="ledger-val mono">+ ${formatExactInt(matArtVal)} Ag</span>
         </div>
-
-        <div class="craft-kpi-item">
-          <div class="kpi-item-head">
-            <span class="kpi-item-label">Vente Nette Lot</span>
-            <span class="kpi-item-val text-gold">${formatExactInt(totalNetRevenue)} Ag</span>
-          </div>
-          <div class="kpi-item-foot">Vente brute : <strong>${formatExactInt(totalGrossRevenue)} Ag</strong></div>
+        <div class="ledger-row">
+          <span class="ledger-label">Taxe station <small>(${formatExactInt(itemVal)} × 0,1125 × ${feeVal}/100)</small></span>
+          <span class="ledger-val mono">+ ${formatExactInt(stationFeePerItem)} Ag</span>
         </div>
-
-        <div class="craft-kpi-item">
-          <div class="kpi-item-head">
-            <span class="kpi-item-label">Frais Station &amp; Marché</span>
-            <span class="kpi-item-val text-dim">${formatExactInt(totalStationFee + totalMarketFee)} Ag</span>
-          </div>
-          <div class="kpi-item-foot">Station : ${formatExactInt(totalStationFee)} Ag • Marché (${(res.marketTaxRate * 100).toFixed(1)}%) : ${formatExactInt(totalMarketFee)} Ag</div>
+        <div class="ledger-row">
+          <span class="ledger-label">Taxes marché <small>(${taxPct}% sur ${formatExactInt(sellVal)} Ag)</small></span>
+          <span class="ledger-val mono">+ ${formatExactInt(marketFeePerItem)} Ag</span>
+        </div>
+        <div class="ledger-row ledger-total">
+          <span class="ledger-label">Coût complet / u <small>(lot ×${res.craftQuantity} : ${formatExactInt(totalCost)} Ag)</small></span>
+          <strong class="ledger-val mono">${formatExactInt(res.totalCostPerItem)} Ag</strong>
+        </div>
+        <div class="ledger-row ledger-revenue">
+          <span class="ledger-label">Recette vente + journal / u <small>(lot ×${res.craftQuantity} : ${formatExactInt(totalRevenue)} Ag)</small></span>
+          <strong class="ledger-val mono text-accent">${formatExactInt(res.netRevenuePerItem)} Ag</strong>
         </div>
       </div>
 
-      <!-- Visual Breakdown Bar -->
       <div class="craft-breakdown-box">
         <div class="breakdown-bar">
-          <div class="breakdown-seg seg-mat" style="width: ${matShare.toFixed(1)}%" title="Matériaux nets: ${matShare.toFixed(1)}%"></div>
-          <div class="breakdown-seg seg-fee" style="width: ${feeShare.toFixed(1)}%" title="Taxes &amp; station: ${feeShare.toFixed(1)}%"></div>
-          ${isProfitable ? `<div class="breakdown-seg seg-profit" style="width: ${profitShare.toFixed(1)}%" title="Profit net: ${profitShare.toFixed(1)}%"></div>` : ""}
+          <div class="breakdown-seg seg-mat" style="width: ${matShare.toFixed(1)}%" title="Matériaux nets : ${matShare.toFixed(1)}%"></div>
+          <div class="breakdown-seg seg-fee" style="width: ${feeShare.toFixed(1)}%" title="Station &amp; taxes : ${feeShare.toFixed(1)}%"></div>
+          ${isProfitable ? `<div class="breakdown-seg seg-profit" style="width: ${profitShare.toFixed(1)}%" title="Profit net : ${profitShare.toFixed(1)}%"></div>` : ""}
         </div>
         <div class="breakdown-legend">
-          <span class="leg-entry"><span class="leg-dot dot-mat"></span> Matériaux (${matShare.toFixed(0)}%)</span>
-          <span class="leg-entry"><span class="leg-dot dot-fee"></span> Taxes (${feeShare.toFixed(0)}%)</span>
-          ${isProfitable ? `<span class="leg-entry"><span class="leg-dot dot-profit"></span> Profit Net (${profitShare.toFixed(0)}%)</span>` : ""}
+          <span class="leg-entry"><span class="leg-dot dot-mat"></span> Matériaux ${matShare.toFixed(0)}%</span>
+          <span class="leg-entry"><span class="leg-dot dot-fee"></span> Taxes ${feeShare.toFixed(0)}%</span>
+          ${isProfitable ? `<span class="leg-entry"><span class="leg-dot dot-profit"></span> Marge ${profitShare.toFixed(0)}%</span>` : ""}
         </div>
       </div>
     </div>
@@ -842,7 +1006,6 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
       spreadSilver: 0,
       spreadPercent: 0,
     };
-    // Tracked mode keeps every tracked item visible (so it can be removed); session mode only priced ones.
     const rows = isSession
       ? items.filter((id) => byId.has(id)).map((id) => byId.get(id))
       : items.map((id) => byId.get(id) || { itemId: id, ...empty });
@@ -850,11 +1013,12 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
 
     if (isSession && banner) {
       const { total, pricedItems } = computeSessionMarketValue(summarized, qtyByItem);
-      const estimated = (latestState?.snapshot?.lootLog || []).reduce(
-        (acc, l) => acc + (Number(l.estimatedSilver) || 0),
-        0,
-      ) + (latestState?.snapshot?.gatheringTotals?.totalEstimatedSilver || 0);
-      banner.innerHTML = `🎒 Valeur marché réelle de la session : <strong>${formatExactInt(total)} Ag</strong> • ${pricedItems}/${items.length} objet(s) cotés • estimation catalogue : ${formatExactInt(estimated)} Ag`;
+      const estimated =
+        (latestState?.snapshot?.lootLog || []).reduce(
+          (acc, l) => acc + (Number(l.estimatedSilver) || 0),
+          0,
+        ) + (latestState?.snapshot?.gatheringTotals?.totalEstimatedSilver || 0);
+      banner.innerHTML = `Valeur marché réelle de la session : <strong class="mono">${formatExactInt(total)} Ag</strong> • ${pricedItems}/${items.length} objet(s) cotés • estimation catalogue : <span class="mono">${formatExactInt(estimated)} Ag</span>`;
       banner.hidden = false;
     }
 
@@ -867,11 +1031,11 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
         <thead>
           <tr>
             <th>Objet</th>
-            ${isSession ? "<th>Qté</th>" : ""}
-            <th>Meilleure Vente</th>
-            <th>Meilleur Achat</th>
-            <th>Écart Arbitrage</th>
-            <th></th>
+            ${isSession ? '<th class="num-col">Qté</th>' : ""}
+            <th>Meilleure vente</th>
+            <th>Meilleur achat</th>
+            <th class="col-optional">Arbitrage</th>
+            <th class="num-col"></th>
           </tr>
         </thead>
         <tbody>
@@ -882,16 +1046,14 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
               const hasBuy = r.bestBuyOrder > 0;
               const hasSpread = hasSell && hasBuy;
               const isProfitSpread = hasSpread && r.spreadSilver > 0;
-              const thumb = renderItemThumbWithTier(r.itemId, 40);
+              const thumb = renderItemThumbWithTier(r.itemId, r.info?.slot || "");
 
               let arbHtml = `<span class="dash-empty">—</span>`;
               if (hasSpread) {
                 arbHtml = `
-                  <div class="arbitrage-pill ${isProfitSpread ? "arb-profit" : "arb-loss"}">
-                    <span class="arb-arrow">${isProfitSpread ? "▲" : "▼"}</span>
-                    <span class="arb-val">${isProfitSpread ? "+" : ""}${formatExactInt(r.spreadSilver)} Ag</span>
-                    <span class="arb-pct">(${isProfitSpread ? "+" : ""}${r.spreadPercent.toFixed(1)}%)</span>
-                  </div>
+                  <span class="arbitrage-pill mono ${isProfitSpread ? "arb-profit" : "arb-loss"}">
+                    ${isProfitSpread ? "+" : ""}${formatExactInt(r.spreadSilver)} Ag (${isProfitSpread ? "+" : ""}${r.spreadPercent.toFixed(1)}%)
+                  </span>
                 `;
               }
 
@@ -902,34 +1064,49 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
                   ${thumb}
                   <div class="item-text-group">
                     <strong class="item-display-name">${escapeHtml(name)}</strong>
-                    ${name !== r.itemId ? `<span class="item-id-sub">${escapeHtml(r.itemId)}</span>` : ""}
+                    ${name !== r.itemId ? `<span class="item-id-sub mono">${escapeHtml(r.itemId)}</span>` : ""}
                   </div>
                 </div>
               </td>
-              ${isSession ? `<td class="qty-cell">×${formatExactInt(qtyByItem[r.itemId] || 0)}</td>` : ""}
+              ${isSession ? `<td class="num-col mono">×${formatExactInt(qtyByItem[r.itemId] || 0)}</td>` : ""}
               <td>
-                ${hasSell ? `
+                ${
+                  hasSell
+                    ? `
                   <div class="price-stack">
-                    <span class="silver-amount">${formatExactInt(r.bestSellPrice)} <span class="ag-tag">Ag</span></span>
+                    <span class="silver-amount mono">${formatExactInt(r.bestSellPrice)} <span class="ag-tag">Ag</span></span>
                     ${renderCityBadge(r.bestSellCity)}
                   </div>
-                ` : `<span class="dash-empty">—</span>`}
+                `
+                    : `<span class="dash-empty">—</span>`
+                }
               </td>
               <td>
-                ${hasBuy ? `
+                ${
+                  hasBuy
+                    ? `
                   <div class="price-stack">
-                    <span class="silver-amount">${formatExactInt(r.bestBuyOrder)} <span class="ag-tag">Ag</span></span>
+                    <span class="silver-amount mono">${formatExactInt(r.bestBuyOrder)} <span class="ag-tag">Ag</span></span>
                     ${renderCityBadge(r.bestBuyCity)}
                   </div>
-                ` : `<span class="dash-empty">—</span>`}
+                `
+                    : `<span class="dash-empty">—</span>`
+                }
               </td>
-              <td>
-                ${arbHtml}
-              </td>
-              <td>
+              <td class="col-optional">${arbHtml}</td>
+              <td class="num-col">
                 <div class="row-actions">
-                  <button class="btn btn-craft btn-xs" type="button" data-craft-item="${escapeHtml(r.itemId)}" title="Pré-remplir le calculateur d'artisanat avec cet objet">⚒ Craft</button>
-                  ${isSession ? "" : `<button class="btn btn-danger-subtle btn-xs" type="button" data-untrack-item="${escapeHtml(r.itemId)}" title="Retirer des objets suivis">✕</button>`}
+                  <button class="btn btn-craft btn-xs" type="button" data-craft-item="${escapeHtml(r.itemId)}" title="Pré-remplir le calculateur d'artisanat avec cet objet">
+                    <svg class="ico"><use href="#ico-hammer"></use></svg>
+                    <span>Craft</span>
+                  </button>
+                  ${
+                    isSession
+                      ? ""
+                      : `<button class="btn btn-danger-subtle btn-xs btn-icon-xs" type="button" data-untrack-item="${escapeHtml(r.itemId)}" title="Retirer des objets suivis" aria-label="Retirer">
+                          <svg class="ico"><use href="#ico-close"></use></svg>
+                        </button>`
+                  }
                 </div>
               </td>
             </tr>
@@ -948,13 +1125,27 @@ const prefillCraftingFromItem = (itemId) => {
   const row = lastPriceRows.find((r) => r.itemId === itemId);
   if (!row) return;
   const name = row.info?.nameFr || itemId;
-  el("craft-name").value = name;
   const price = row.bestSellPrice > 0 ? row.bestSellPrice : row.bestBuyOrder;
+  const itemVal = row.info?.itemValue > 0 ? row.info.itemValue : Number(el("craft-item-val")?.value) || 0;
+
+  el("craft-name").value = name;
   if (price > 0) el("craft-sell").value = String(Math.round(price));
   if (row.info?.itemValue > 0) el("craft-item-val").value = String(row.info.itemValue);
+
+  const est = estimateCraftingDefaults(itemId, price, itemVal);
+  if (el("craft-mat-ret")) el("craft-mat-ret").value = String(est.returnableCost);
+  if (el("craft-mat-art")) el("craft-mat-art").value = String(est.artefactCost);
+  if (el("craft-journal")) el("craft-journal").value = String(est.journalProfit);
+
+  const note = el("craft-prefill-note");
+  if (note) {
+    note.textContent = `Pré-rempli pour ${name} — coûts matériaux estimés, ajustez-les à vos prix d'achat réels`;
+    note.classList.add("is-highlighted");
+  }
+
   updateCraftingSimulation();
-  el("craft-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  showToast(`Calculateur pré-rempli : ${name}${price > 0 ? ` à ${formatExactInt(price)} Ag` : ""}`);
+  el("craft-form")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  showToast(`Calculateur mis à jour : ${name}${price > 0 ? ` (${formatExactInt(price)} Ag)` : ""}`);
 };
 
 const addTrackedItem = async (item) => {
@@ -1000,17 +1191,17 @@ const runMarketSearch = async (query) => {
   }
   if (seq !== searchSeq) return;
   if (results.length === 0) {
-    box.innerHTML = `<div class="search-result-empty">Aucun objet trouvé. Astuce : synchronisez la base complète via 📦 Base.</div>`;
+    box.innerHTML = `<div class="search-result-empty">Aucun objet trouvé. Synchronisez la base complète via le bouton Catalogue.</div>`;
   } else {
     for (const it of results) itemInfoCache.set(it.uniqueName, it);
     box.innerHTML = results
       .map(
         (it) => `
         <button class="search-result-item" type="button" data-add-item="${escapeHtml(it.uniqueName)}">
-          ${renderItemThumb(it.uniqueName, 32)}
+          ${renderItemThumb(it.uniqueName, "icon-slot-sm", it.slot)}
           <span class="search-result-meta">
             <strong>${escapeHtml(it.nameFr || it.nameEn || it.uniqueName)}</strong>
-            <small>${escapeHtml(it.uniqueName)} • T${it.tier}.${it.enchantment}</small>
+            <small class="mono">${escapeHtml(it.uniqueName)} • T${it.tier}.${it.enchantment}</small>
           </span>
         </button>
       `,
@@ -1023,7 +1214,7 @@ const runMarketSearch = async (query) => {
 const syncCatalogFromGitHub = async () => {
   const btn = el("btn-sync-catalog");
   if (btn) btn.disabled = true;
-  showToast("Téléchargement de la base d'objets, zones et sorts Albion (ao-bin-dumps)…");
+  showToast("Synchronisation de la base Albion (ao-bin-dumps : objets, zones et sorts)…");
   try {
     const base = "https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master";
     const [itemsResp, worldResp, spellsResp] = await Promise.all([
@@ -1044,7 +1235,7 @@ const syncCatalogFromGitHub = async () => {
     await refreshState(true);
     const spellCount = latestState?.snapshot?.catalogSpellCount || 0;
     showToast(
-      `Catalogue synchronisé et mis en cache (+${formatExactInt(added || 0)} entrées, ${formatExactInt(spellCount)} sorts) !`,
+      `Catalogue synchronisé (+${formatExactInt(added || 0)} entrées, ${formatExactInt(spellCount)} sorts).`,
     );
   } catch (err) {
     showToast(`Échec synchronisation ao-bin-dumps : ${err.message || err}`);
@@ -1187,7 +1378,7 @@ const initEvents = () => {
       selectedSnapshotId = "live";
       lastStateSignature = computeStateSignature(res);
       renderAll();
-      showToast("Scénario Photon UDP (combat 5v5, brumes, récolte, butin, marché) injecté !");
+      showToast("Scénario Photon UDP injecté (combat 5v5, brumes, récolte, butin, marché).");
     }
   });
 
@@ -1226,7 +1417,21 @@ const initEvents = () => {
   });
 
   el("btn-min")?.addEventListener("click", () => tauriWindow?.minimize?.());
+  el("btn-max")?.addEventListener("click", () => toggleMaximizeWindow());
   el("btn-close")?.addEventListener("click", () => tauriWindow?.close?.());
+
+  document.querySelector(".titlebar")?.addEventListener("dblclick", (ev) => {
+    if (ev.target.closest("button, input, select, label, .opacity-control")) return;
+    if (!tauriWindow) {
+      toggleMaximizeWindow();
+    } else {
+      setTimeout(() => syncMaximizedState(), 80);
+    }
+  });
+
+  window.addEventListener("resize", () => {
+    syncMaximizedState();
+  });
 
   // Combat toolbar buttons
   el("btn-copy-meter")?.addEventListener("click", async () => {
@@ -1240,7 +1445,7 @@ const initEvents = () => {
     );
     try {
       await navigator.clipboard.writeText(text);
-      showToast("Classement copié dans le presse-papiers !");
+      showToast("Classement copié dans le presse-papiers.");
     } catch {
       showToast(text);
     }
@@ -1282,7 +1487,7 @@ const initEvents = () => {
     if (csv) {
       try {
         await navigator.clipboard.writeText(csv);
-        showToast("Journal de butin CSV copié dans le presse-papiers !");
+        showToast("Journal de butin CSV copié dans le presse-papiers.");
       } catch {
         showToast("Export CSV prêt.");
       }
@@ -1303,7 +1508,7 @@ const initEvents = () => {
     fetchAlbionDataPrices();
   });
 
-  // Preset bonus buttons (0% Île, 18% Cité, 47.9% Focus)
+  // Preset bonus buttons
   document.querySelectorAll(".preset-pill[data-preset-bonus]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const b = btn.getAttribute("data-preset-bonus");
@@ -1343,7 +1548,6 @@ const initEvents = () => {
   searchInput?.addEventListener("focus", () => {
     if ((searchInput.value || "").trim().length >= 2) runMarketSearch(searchInput.value);
   });
-  // Prevent the input from losing focus on mousedown; the click handler performs the selection.
   el("market-search-results")?.addEventListener("mousedown", (ev) => {
     if (ev.target.closest("[data-add-item]")) ev.preventDefault();
   });
@@ -1404,7 +1608,7 @@ const boot = async () => {
 
   const priceWrap = el("api-price-rows");
   if (priceWrap) {
-    priceWrap.innerHTML = `<div class="empty-state">${settings.trackedItems.length} objet(s) suivi(s). Cliquez sur <strong>🌐 Actualiser Prix API</strong> ou recherchez un objet pour l'ajouter.</div>`;
+    priceWrap.innerHTML = `<div class="empty-state">${settings.trackedItems.length} objet(s) suivi(s). Cliquez sur <strong>Actualiser</strong> ou recherchez un objet pour l'ajouter.</div>`;
   }
 
   setInterval(() => refreshState(false), settings.autoRefreshMs);
