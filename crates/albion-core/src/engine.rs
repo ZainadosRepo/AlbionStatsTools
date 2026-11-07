@@ -17,6 +17,7 @@ const MAX_GATHERING_LOG: usize = 200;
 const MAX_DUNGEON_RUNS: usize = 60;
 const MAX_MARKET_ENTRIES: usize = 150;
 const MAX_SNAPSHOTS: usize = 30;
+const MAX_ARCHIVED_SESSIONS: usize = 30;
 const LOOT_DEDUP_WINDOW_MS: u64 = 2_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -274,6 +275,26 @@ pub struct NetworkDiagnostics {
     pub pending_fragments: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivedSession {
+    pub id: String,
+    pub label: String,
+    pub started_at_ms: u64,
+    pub ended_at_ms: u64,
+    pub duration_seconds: f64,
+    pub map_name_fr: String,
+    pub fame: f64,
+    pub fame_per_hour: f64,
+    pub silver: f64,
+    pub silver_per_hour: f64,
+    pub respec_points: f64,
+    pub might: f64,
+    pub favor: f64,
+    pub kills: u32,
+    pub deaths: u32,
+}
+
 /// Complete immutable snapshot returned to the UI on poll or command completion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -281,6 +302,7 @@ pub struct AppSnapshot {
     pub catalog_version: String,
     pub catalog_item_count: usize,
     pub catalog_spell_count: usize,
+    pub catalog_recipe_count: usize,
     pub local_player: LocalPlayerProfile,
     pub combat_seconds: f64,
     pub total_party_damage: i64,
@@ -289,6 +311,7 @@ pub struct AppSnapshot {
     pub meter_players: Vec<DamageMeterPlayer>,
     pub snapshots: Vec<MeterSnapshot>,
     pub session: SessionStats,
+    pub archived_sessions: Vec<ArchivedSession>,
     pub dungeons: Vec<DungeonRun>,
     pub gathering_totals: GatheringTotals,
     pub gathering_log: Vec<GatheringEntry>,
@@ -306,6 +329,8 @@ pub struct AppSnapshot {
 pub struct PersistedHistory {
     #[serde(default)]
     pub snapshots: Vec<MeterSnapshot>,
+    #[serde(default)]
+    pub archived_sessions: Vec<ArchivedSession>,
     #[serde(default)]
     pub dungeons: Vec<DungeonRun>,
     #[serde(default)]
@@ -370,6 +395,7 @@ pub struct AnalyzerEngine {
 
     snapshots: Vec<MeterSnapshot>,
     session: SessionStats,
+    archived_sessions: Vec<ArchivedSession>,
     faction_map: BTreeMap<CityFaction, (f64, f64, f64)>,
     dungeons: Vec<DungeonRun>,
     gathering_totals: GatheringTotals,
@@ -466,6 +492,7 @@ impl AnalyzerEngine {
                 deaths: 0,
                 factions: Vec::new(),
             },
+            archived_sessions: Vec::new(),
             faction_map,
             dungeons: Vec::new(),
             gathering_totals: GatheringTotals::default(),
@@ -1461,10 +1488,76 @@ impl AnalyzerEngine {
         deleted
     }
 
-    /// Exports persisted history (snapshots, dungeons, gathering, loot) for disk storage.
+    pub fn has_session_activity(&self) -> bool {
+        self.session.fame > 0.0
+            || self.session.silver > 0.0
+            || self.session.respec_points > 0.0
+            || self.session.might > 0.0
+            || self.session.favor > 0.0
+            || self.session.kills > 0
+            || self.session.deaths > 0
+    }
+
+    /// Archives the current live session summary into `archived_sessions` (persisted to disk)
+    /// and resets live session counters for the next session.
+    pub fn archive_session(
+        &mut self,
+        custom_label: Option<String>,
+        now_ms: u64,
+    ) -> Option<ArchivedSession> {
+        if !self.has_session_activity() {
+            return None;
+        }
+        let ended_at_ms = self.last_now_ms.max(now_ms);
+        let duration_seconds =
+            ((ended_at_ms.saturating_sub(self.session_start_ms)) as f64 / 1000.0).max(1.0);
+        let hours = duration_seconds / 3600.0;
+        let id = format!("sess-{}", self.alloc_id());
+        let label = custom_label
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| self.local_player.current_map_name_fr.clone());
+
+        let archived = ArchivedSession {
+            id,
+            label,
+            started_at_ms: self.session_start_ms,
+            ended_at_ms,
+            duration_seconds,
+            map_name_fr: self.local_player.current_map_name_fr.clone(),
+            fame: self.session.fame,
+            fame_per_hour: self.session.fame / hours,
+            silver: self.session.silver,
+            silver_per_hour: self.session.silver / hours,
+            respec_points: self.session.respec_points,
+            might: self.session.might,
+            favor: self.session.favor,
+            kills: self.session.kills,
+            deaths: self.session.deaths,
+        };
+        self.archived_sessions.insert(0, archived.clone());
+        if self.archived_sessions.len() > MAX_ARCHIVED_SESSIONS {
+            self.archived_sessions.truncate(MAX_ARCHIVED_SESSIONS);
+        }
+        self.reset_session(ended_at_ms);
+        self.dirty_history = true;
+        Some(archived)
+    }
+
+    pub fn delete_archived_session(&mut self, id: &str) -> bool {
+        let before = self.archived_sessions.len();
+        self.archived_sessions.retain(|s| s.id != id);
+        let deleted = self.archived_sessions.len() != before;
+        if deleted {
+            self.dirty_history = true;
+        }
+        deleted
+    }
+
+    /// Exports persisted history (snapshots, archived sessions, dungeons, gathering, loot) for disk storage.
     pub fn export_history(&self) -> PersistedHistory {
         PersistedHistory {
             snapshots: self.snapshots.clone(),
+            archived_sessions: self.archived_sessions.clone(),
             dungeons: self.dungeons.clone(),
             gathering_totals: self.gathering_totals.clone(),
             gathering_log: self.gathering_log.clone(),
@@ -1475,6 +1568,7 @@ impl AnalyzerEngine {
     /// Restores persisted history loaded from disk at startup.
     pub fn restore_history(&mut self, mut history: PersistedHistory) {
         history.snapshots.truncate(MAX_SNAPSHOTS);
+        history.archived_sessions.truncate(MAX_ARCHIVED_SESSIONS);
         history.dungeons.truncate(MAX_DUNGEON_RUNS);
         history.gathering_log.truncate(MAX_GATHERING_LOG);
         history.loot_log.truncate(MAX_LOOT_LOG);
@@ -1482,6 +1576,7 @@ impl AnalyzerEngine {
             d.is_active = false;
         }
         self.snapshots = history.snapshots;
+        self.archived_sessions = history.archived_sessions;
         self.dungeons = history.dungeons;
         self.gathering_totals = history.gathering_totals;
         self.gathering_log = history.gathering_log;
@@ -1760,6 +1855,7 @@ impl AnalyzerEngine {
             catalog_version: self.catalog.version.clone(),
             catalog_item_count: self.catalog.item_count(),
             catalog_spell_count: self.catalog.spell_count(),
+            catalog_recipe_count: self.catalog.recipe_count(),
             local_player: self.local_player.clone(),
             combat_seconds,
             total_party_damage,
@@ -1768,6 +1864,7 @@ impl AnalyzerEngine {
             meter_players,
             snapshots: self.snapshots.clone(),
             session,
+            archived_sessions: self.archived_sessions.clone(),
             dungeons,
             gathering_totals: self.gathering_totals.clone(),
             gathering_log: self.gathering_log.clone(),
@@ -2325,9 +2422,13 @@ mod tests {
         engine.run_wire_simulation_scenario(1_000);
         let saved_snap = engine.take_snapshot(Some("Boss Brumes".into()), 20_000);
         assert!(saved_snap.is_some());
+        let saved_sess = engine.archive_session(Some("Soirée Brumes".into()), 25_000);
+        assert!(saved_sess.is_some());
+        assert!(!engine.has_session_activity());
 
         let exported = engine.export_history();
         assert_eq!(exported.snapshots.len(), 1);
+        assert_eq!(exported.archived_sessions.len(), 1);
         assert_eq!(exported.dungeons.len(), 1);
         assert_eq!(exported.loot_log.len(), 1);
 
@@ -2336,9 +2437,16 @@ mod tests {
         let restored = fresh.snapshot(50_000);
         assert_eq!(restored.snapshots.len(), 1);
         assert_eq!(restored.snapshots[0].label, "Boss Brumes");
+        assert_eq!(restored.archived_sessions.len(), 1);
+        assert_eq!(restored.archived_sessions[0].label, "Soirée Brumes");
+        assert!(restored.archived_sessions[0].fame > 0.0);
         assert_eq!(restored.dungeons.len(), 1);
         assert!(!restored.dungeons[0].is_active);
         assert_eq!(restored.loot_log.len(), 1);
+
+        let sess_id = restored.archived_sessions[0].id.clone();
+        assert!(fresh.delete_archived_session(&sess_id));
+        assert!(fresh.snapshot(50_000).archived_sessions.is_empty());
     }
 
     #[test]

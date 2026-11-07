@@ -346,6 +346,65 @@ export const estimateCraftingDefaults = (uniqueName, sellPrice = 0, itemValue = 
   };
 };
 
+/**
+ * Evaluates exact per-crafted-unit returnable resource and non-returnable artefact costs
+ * from a catalog `CraftingRecipe` and summarized Albion Data Project price rows.
+ */
+export const computeRecipeMaterialCosts = (recipe, summarizedPrices = []) => {
+  if (!recipe || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
+    return null;
+  }
+  const amountCrafted = Math.max(1, Number(recipe.amountCrafted) || 1);
+  const byId = new Map((summarizedPrices || []).map((r) => [r.itemId, r]));
+
+  let returnablePerUnitFloat = 0;
+  let nonReturnablePerUnitFloat = 0;
+  let pricedCount = 0;
+  let missingCount = 0;
+
+  const lines = recipe.ingredients.map((ing) => {
+    const row = byId.get(ing.uniqueName);
+    const hasSell = (row?.bestSellPrice || 0) > 0;
+    const hasBuy = (row?.bestBuyOrder || 0) > 0;
+    const unitPrice = hasSell ? row.bestSellPrice : hasBuy ? row.bestBuyOrder : 0;
+    const city = hasSell ? row.bestSellCity : hasBuy ? row.bestBuyCity : "-";
+    const priceSource = hasSell ? "sell" : hasBuy ? "buy" : "missing";
+    const count = Math.max(0, Number(ing.count) || 0);
+    const lineBatchCost = count * unitPrice;
+    const linePerCraftedUnit = lineBatchCost / amountCrafted;
+
+    if (unitPrice > 0) pricedCount += 1;
+    else missingCount += 1;
+
+    if (ing.isReturnable) returnablePerUnitFloat += linePerCraftedUnit;
+    else nonReturnablePerUnitFloat += linePerCraftedUnit;
+
+    return {
+      uniqueName: ing.uniqueName,
+      nameFr: ing.nameFr || ing.uniqueName,
+      count,
+      isReturnable: Boolean(ing.isReturnable),
+      unitPrice,
+      city,
+      priceSource,
+      lineBatchCost: Math.round(lineBatchCost),
+      linePerCraftedUnit: Math.round(linePerCraftedUnit),
+    };
+  });
+
+  return {
+    itemUniqueName: recipe.itemUniqueName,
+    amountCrafted,
+    craftingFocus: Number(recipe.craftingFocus) || 0,
+    itemValue: Number(recipe.itemValue) || 0,
+    returnablePerUnit: Math.round(returnablePerUnitFloat),
+    nonReturnablePerUnit: Math.round(nonReturnablePerUnitFloat),
+    pricedCount,
+    missingCount,
+    lines,
+  };
+};
+
 const isPriceableUniqueName = (name) =>
   typeof name === "string" &&
   name.length > 0 &&

@@ -2,9 +2,9 @@ mod capture;
 mod settings;
 mod update;
 
-use albion_core::catalog::{Catalog, ItemEntry};
+use albion_core::catalog::{Catalog, CraftingRecipe, ItemEntry};
 use albion_core::crafting::{simulate_crafting, CraftingSimulationInput, CraftingSimulationResult};
-use albion_core::engine::{AnalyzerEngine, AppSnapshot, MeterSnapshot};
+use albion_core::engine::{AnalyzerEngine, AppSnapshot, ArchivedSession, MeterSnapshot};
 use capture::{now_unix_ms, start_background_capture, CaptureStatus};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use serde::Serialize;
@@ -13,6 +13,7 @@ use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 const CATALOG_JSON: &str = include_str!("../../data/catalog.json");
+const RECIPES_JSON: &str = include_str!("../../data/recipes.json");
 const LIVE_HISTORY_FLUSH_INTERVAL_MS: u64 = 10_000;
 
 struct AppState {
@@ -158,8 +159,57 @@ fn delete_snapshot(
 }
 
 #[tauri::command]
+fn archive_session(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+    label: Option<String>,
+) -> Result<Option<ArchivedSession>, String> {
+    let now = now_unix_ms();
+    let mut eng = state
+        .engine
+        .lock()
+        .map_err(|_| "verrou moteur indisponible".to_string())?;
+    let archived = eng.archive_session(label, now);
+    if archived.is_some() {
+        let _ = eng.take_dirty_history();
+        persist_history_best_effort(&app, &eng);
+    }
+    Ok(archived)
+}
+
+#[tauri::command]
+fn delete_archived_session(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+    id: String,
+) -> Result<bool, String> {
+    let mut eng = state
+        .engine
+        .lock()
+        .map_err(|_| "verrou moteur indisponible".to_string())?;
+    let deleted = eng.delete_archived_session(&id);
+    if deleted {
+        let _ = eng.take_dirty_history();
+        persist_history_best_effort(&app, &eng);
+    }
+    Ok(deleted)
+}
+
+#[tauri::command]
 fn calculate_crafting(input: CraftingSimulationInput) -> CraftingSimulationResult {
     simulate_crafting(&input)
+}
+
+#[tauri::command]
+fn get_crafting_recipe(
+    state: tauri::State<AppState>,
+    unique_name: String,
+) -> Result<Option<CraftingRecipe>, String> {
+    let eng = state
+        .engine
+        .lock()
+        .map_err(|_| "verrou moteur indisponible".to_string())?;
+    Ok(eng.catalog.recipe(&unique_name))
 }
 
 #[tauri::command]
@@ -205,6 +255,7 @@ fn import_ao_bin_dumps(
     json_text: String,
     world_json: Option<String>,
     spells_xml: Option<String>,
+    items_xml: Option<String>,
 ) -> Result<usize, String> {
     let mut eng = state
         .engine
@@ -219,6 +270,12 @@ fn import_ao_bin_dumps(
     if let Some(s_xml) = spells_xml {
         if !s_xml.trim().is_empty() {
             let res = eng.catalog.merge_ao_bin_dumps_spells_xml(&s_xml);
+            added += res.unwrap_or(0);
+        }
+    }
+    if let Some(i_xml) = items_xml {
+        if !i_xml.trim().is_empty() {
+            let res = eng.catalog.merge_ao_bin_dumps_items_xml(&i_xml);
             added += res.unwrap_or(0);
         }
     }
@@ -326,8 +383,9 @@ fn toggle_click_through_shortcut(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let now = now_unix_ms();
-    let catalog =
+    let mut catalog =
         Catalog::from_json_str(CATALOG_JSON).expect("embedded data/catalog.json is valid");
+    let _ = catalog.load_compact_recipes_json(RECIPES_JSON, false);
     let engine = Arc::new(Mutex::new(AnalyzerEngine::new(catalog, now)));
     let capture_status = Arc::new(Mutex::new(CaptureStatus::default()));
     start_background_capture(Arc::clone(&engine), Arc::clone(&capture_status));
@@ -363,6 +421,7 @@ pub fn run() {
             WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
                 let app = window.app_handle();
                 if let Ok(mut eng) = app.state::<AppState>().engine.lock() {
+                    let _ = eng.archive_session(None, now_unix_ms());
                     let _ = eng.take_dirty_history();
                     persist_history_best_effort(app, &eng);
                 }
@@ -375,9 +434,11 @@ pub fn run() {
             if let Ok(mut eng) = app.state::<AppState>().engine.lock() {
                 if let Ok(cat_path) = catalog_cache_path(handle) {
                     if let Ok(text) = std::fs::read_to_string(&cat_path) {
-                        if let Ok(cached_cat) = Catalog::from_json_str(&text) {
+                        if let Ok(mut cached_cat) = Catalog::from_json_str(&text) {
+                            let _ = cached_cat.load_compact_recipes_json(RECIPES_JSON, false);
                             if cached_cat.item_count() >= eng.catalog.item_count()
                                 || cached_cat.spell_count() > eng.catalog.spell_count()
+                                || cached_cat.recipe_count() > eng.catalog.recipe_count()
                             {
                                 eng.catalog = cached_cat;
                             }
@@ -405,9 +466,12 @@ pub fn run() {
             simulate_session,
             reset_meter,
             reset_session,
+            archive_session,
+            delete_archived_session,
             take_snapshot,
             delete_snapshot,
             calculate_crafting,
+            get_crafting_recipe,
             export_loot_csv,
             list_catalog_items,
             search_catalog_items,

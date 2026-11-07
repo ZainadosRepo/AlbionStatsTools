@@ -7,6 +7,7 @@ import {
   buildAlbionSpellIconCandidates,
   buildAlbionSpellIconUrl,
   collectSessionPriceableItems,
+  computeRecipeMaterialCosts,
   computeSessionMarketValue,
   estimateCraftingDefaults,
   formatDuration,
@@ -170,6 +171,44 @@ test("estimateCraftingDefaults separates artefact items from standard items", ()
   assert.equal(standard.isArtefact, false);
   assert.equal(standard.artefactCost, 0);
   assert.ok(standard.returnableCost > 0);
+});
+
+test("computeRecipeMaterialCosts computes exact live returnable and artefact costs per crafted unit", () => {
+  const bowRecipe = {
+    itemUniqueName: "T8_2H_BOW_KEEPER@2",
+    amountCrafted: 1,
+    craftingFocus: 49260,
+    itemValue: 32768,
+    ingredients: [
+      { uniqueName: "T8_PLANKS_LEVEL2@2", nameFr: "Planches d'épicéa rares", count: 32, isReturnable: true },
+      { uniqueName: "T8_ARTEFACT_2H_BOW_KEEPER", nameFr: "Os sculpté du sage", count: 1, isReturnable: false },
+    ],
+  };
+  const bowEval = computeRecipeMaterialCosts(bowRecipe, [
+    { itemId: "T8_PLANKS_LEVEL2@2", bestSellPrice: 245000, bestSellCity: "Bridgewatch", bestBuyOrder: 199000, bestBuyCity: "Fort Sterling" },
+    { itemId: "T8_ARTEFACT_2H_BOW_KEEPER", bestSellPrice: 600000, bestSellCity: "Fort Sterling", bestBuyOrder: 0, bestBuyCity: "-" },
+  ]);
+  assert.equal(bowEval.returnablePerUnit, 32 * 245000);
+  assert.equal(bowEval.nonReturnablePerUnit, 600000);
+  assert.equal(bowEval.pricedCount, 2);
+  assert.equal(bowEval.missingCount, 0);
+
+  const stewRecipe = {
+    itemUniqueName: "T8_MEAL_STEW@1",
+    amountCrafted: 10,
+    craftingFocus: 752,
+    itemValue: 576,
+    ingredients: [
+      { uniqueName: "T8_PUMPKIN", nameFr: "Citrouille", count: 36, isReturnable: true },
+      { uniqueName: "T1_FISHSAUCE_LEVEL1", nameFr: "Sauce de poisson basique", count: 90, isReturnable: false },
+    ],
+  };
+  const stewEval = computeRecipeMaterialCosts(stewRecipe, [
+    { itemId: "T8_PUMPKIN", bestSellPrice: 500, bestSellCity: "Caerleon", bestBuyOrder: 400, bestBuyCity: "Caerleon" },
+    { itemId: "T1_FISHSAUCE_LEVEL1", bestSellPrice: 4000, bestSellCity: "Lymhurst", bestBuyOrder: 3600, bestBuyCity: "Lymhurst" },
+  ]);
+  assert.equal(stewEval.returnablePerUnit, (36 * 500) / 10);
+  assert.equal(stewEval.nonReturnablePerUnit, (90 * 4000) / 10);
 });
 
 test("collectSessionPriceableItems aggregates loot and gathering quantities", () => {
