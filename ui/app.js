@@ -3,6 +3,7 @@ import {
   buildAlbionItemIconCandidates,
   buildAlbionSpellIconCandidates,
   collectSessionPriceableItems,
+  computeRecipeMaterialCosts,
   computeSessionMarketValue,
   estimateCraftingDefaults,
   formatDuration,
@@ -33,6 +34,8 @@ let lastStateSignature = "";
 let toastTimer = null;
 let searchTimer = null;
 let searchSeq = 0;
+let recipePriceSeq = 0;
+let activeCraftItemContext = null;
 let lastPriceRows = [];
 let browserMaximizedFallback = false;
 const itemInfoCache = new Map();
@@ -105,6 +108,12 @@ const inferItemFallbackGlyph = (uniqueName, slotHint = "") => {
     clean.includes("_FIBER") ||
     clean.includes("_HIDE") ||
     clean.includes("_ROCK") ||
+    clean.includes("_PLANKS") ||
+    clean.includes("_METALBAR") ||
+    clean.includes("_CLOTH") ||
+    clean.includes("_LEATHER") ||
+    clean.includes("_STONEBLOCK") ||
+    clean.includes("_ARTEFACT") ||
     clean.includes("_FISH") ||
     clean.includes("_RUNE") ||
     clean.includes("_SOUL") ||
@@ -353,7 +362,7 @@ const renderHeader = () => {
     catCount.textContent = formatExactInt(snap.catalogItemCount);
     const syncBtn = el("btn-sync-catalog");
     if (syncBtn) {
-      syncBtn.title = `Catalogue : ${formatExactInt(snap.catalogItemCount)} objets • ${formatExactInt(snap.catalogSpellCount || 0)} sorts — cliquer pour synchroniser ao-bin-dumps`;
+      syncBtn.title = `Catalogue : ${formatExactInt(snap.catalogItemCount)} objets • ${formatExactInt(snap.catalogSpellCount || 0)} sorts • ${formatExactInt(snap.catalogRecipeCount || 0)} recettes — cliquer pour synchroniser ao-bin-dumps`;
     }
   }
 
@@ -526,6 +535,83 @@ const renderSessionTab = () => {
   el("kpi-kd").textContent = `${s.kills} K / ${s.deaths} D`;
   el("kpi-focus").textContent = `Focus : ${formatExactInt(lp.focusPoints)} / ${formatExactInt(lp.maxFocusPoints)}`;
   el("kpi-season").textContent = `Points GvG : ${s.seasonPoints} • LP : ${formatExactInt(lp.learningPoints)}`;
+
+  const archived = snap.archivedSessions || [];
+  const archBadge = el("archived-session-badge");
+  if (archBadge) {
+    archBadge.textContent = `${archived.length} session${archived.length > 1 ? "s" : ""}`;
+  }
+  const archWrap = el("archived-session-rows");
+  if (archWrap) {
+    if (archived.length === 0) {
+      archWrap.innerHTML = `<div class="empty-state">Aucune session archivée. Cliquez sur <strong>Terminer &amp; enregistrer</strong> ou fermez l'application après une activité pour sauvegarder le bilan sur le disque.</div>`;
+    } else {
+      archWrap.innerHTML = `
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Session</th>
+              <th class="num-col">Renommée</th>
+              <th class="num-col">Argent</th>
+              <th class="num-col col-optional">Bilan</th>
+              <th class="num-col"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${archived
+              .map((a) => {
+                const dateStr =
+                  a.endedAtMs > 0
+                    ? new Date(a.endedAtMs).toLocaleString("fr-FR", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : "—";
+                const extraParts = [`${a.kills || 0}K/${a.deaths || 0}D`];
+                if ((a.might || 0) > 0) extraParts.push(`${formatNumber(a.might)} M`);
+                return `
+              <tr>
+                <td>
+                  <div class="item-text-group">
+                    <strong class="item-display-name">${escapeHtml(a.label)}</strong>
+                    <span class="item-id-sub mono">${escapeHtml(dateStr)} • ${formatDuration(a.durationSeconds)}</span>
+                  </div>
+                </td>
+                <td class="num-col mono">
+                  <div class="session-stat-stack">
+                    <span>${formatNumber(a.fame)}</span>
+                    <small class="session-stat-sub">${formatNumber(a.famePerHour)}/h</small>
+                  </div>
+                </td>
+                <td class="num-col mono">
+                  <div class="session-stat-stack">
+                    <span>${formatNumber(a.silver)} <span class="ag-tag">Ag</span></span>
+                    <small class="session-stat-sub">${formatNumber(a.silverPerHour)}/h</small>
+                  </div>
+                </td>
+                <td class="num-col mono col-optional">${escapeHtml(extraParts.join(" • "))}</td>
+                <td class="num-col">
+                  <button
+                    class="btn btn-danger-subtle btn-xs btn-icon-xs"
+                    type="button"
+                    data-del-archived-session="${escapeHtml(a.id)}"
+                    title="Supprimer cette session de l'historique"
+                    aria-label="Supprimer la session"
+                  >
+                    <svg class="ico"><use href="#ico-trash"></use></svg>
+                  </button>
+                </td>
+              </tr>
+            `;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      `;
+    }
+  }
 
   el("faction-rows").innerHTML = `
     <table class="data-table">
@@ -963,14 +1049,14 @@ const resolveItemInfo = async (uniqueName) => {
   return info;
 };
 
-const fetchPriceRows = async (items) => {
+const fetchPriceRows = async (items, qualities = [1, 2, 3]) => {
   const chunks = [];
   for (let i = 0; i < items.length; i += PRICE_CHUNK_SIZE) {
     chunks.push(items.slice(i, i + PRICE_CHUNK_SIZE));
   }
   const responses = await Promise.all(
     chunks.map(async (chunk) => {
-      const url = buildAlbionDataPriceUrl(settings.region, chunk, settings.selectedCities, [1, 2, 3]);
+      const url = buildAlbionDataPriceUrl(settings.region, chunk, settings.selectedCities, qualities);
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return resp.json();
@@ -1121,6 +1207,150 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
   }
 };
 
+const renderRecipeBreakdown = (recipe, evalRes = null) => {
+  const box = el("craft-recipe-box");
+  if (!box || !recipe) return;
+  const amountCrafted = Math.max(1, Number(recipe.amountCrafted) || 1);
+  const focusVal = Number(recipe.craftingFocus) || 0;
+  const lines = evalRes
+    ? evalRes.lines
+    : (recipe.ingredients || []).map((ing) => ({
+        uniqueName: ing.uniqueName,
+        nameFr: ing.nameFr || ing.uniqueName,
+        count: ing.count,
+        isReturnable: Boolean(ing.isReturnable),
+        unitPrice: 0,
+        city: "-",
+        linePerCraftedUnit: 0,
+      }));
+
+  box.innerHTML = `
+    <div class="recipe-header">
+      <span class="recipe-title">Recette items.xml <span class="mono recipe-id-tag">${escapeHtml(recipe.itemUniqueName)}</span></span>
+      <div class="recipe-badges">
+        ${amountCrafted > 1 ? `<span class="badge-subtle">Lot ×${amountCrafted} (/ u)</span>` : ""}
+        ${focusVal > 0 ? `<span class="badge-subtle">Focus ${formatExactInt(focusVal)}</span>` : ""}
+      </div>
+    </div>
+    <div class="recipe-ing-list">
+      ${lines
+        .map(
+          (ing) => `
+        <div class="recipe-ing-row">
+          <div class="recipe-ing-left">
+            ${renderItemThumb(ing.uniqueName, "icon-slot-xs", "material")}
+            <span class="recipe-ing-qty mono">${formatExactInt(ing.count)}×</span>
+            <span class="recipe-ing-name" title="${escapeHtml(ing.uniqueName)}">${escapeHtml(ing.nameFr)}</span>
+            <span class="rrr-tag ${ing.isReturnable ? "is-ret" : "is-nonret"}">${ing.isReturnable ? "RRR" : "0% RRR"}</span>
+          </div>
+          <div class="recipe-ing-right">
+            ${
+              ing.unitPrice > 0
+                ? `
+              ${renderCityBadge(ing.city)}
+              <span class="recipe-unit-price mono">${formatExactInt(ing.unitPrice)} <span class="ag-tag">Ag</span></span>
+              <strong class="recipe-line-total mono">${formatExactInt(ing.linePerCraftedUnit)} Ag</strong>
+            `
+                : `<span class="rrr-tag is-missing">Non coté</span>`
+            }
+          </div>
+        </div>
+      `,
+        )
+        .join("")}
+    </div>
+  `;
+  box.hidden = false;
+};
+
+const loadAndPriceCraftingRecipe = async (ctx, showFeedbackToast = false) => {
+  if (!ctx?.itemId) return;
+  const seq = ++recipePriceSeq;
+  const note = el("craft-prefill-note");
+  const refreshBtn = el("btn-refresh-recipe-prices");
+  const recipeBox = el("craft-recipe-box");
+
+  let recipe = null;
+  try {
+    recipe = await invokeCmd("get_crafting_recipe", { uniqueName: ctx.itemId });
+  } catch (e) {
+    console.warn("get_crafting_recipe:", e);
+  }
+  if (seq !== recipePriceSeq) return;
+
+  if (!recipe || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
+    if (refreshBtn) refreshBtn.hidden = true;
+    if (recipeBox) recipeBox.hidden = true;
+    const est = estimateCraftingDefaults(ctx.itemId, ctx.price, ctx.itemVal);
+    if (el("craft-mat-ret")) el("craft-mat-ret").value = String(est.returnableCost);
+    if (el("craft-mat-art")) el("craft-mat-art").value = String(est.artefactCost);
+    if (el("craft-journal")) el("craft-journal").value = String(est.journalProfit);
+    if (note) {
+      note.textContent = `Pré-rempli pour ${ctx.name} — aucune recette d'établi indexée, coûts estimés`;
+      note.classList.add("is-highlighted");
+    }
+    await updateCraftingSimulation();
+    if (showFeedbackToast) {
+      showToast(`Calculateur mis à jour : ${ctx.name}${ctx.price > 0 ? ` (${formatExactInt(ctx.price)} Ag)` : ""}`);
+    }
+    return;
+  }
+
+  if (refreshBtn) {
+    refreshBtn.hidden = false;
+    refreshBtn.disabled = true;
+  }
+  const effectiveItemVal = recipe.itemValue > 0 ? recipe.itemValue : ctx.itemVal;
+  if (effectiveItemVal > 0 && el("craft-item-val")) {
+    el("craft-item-val").value = String(effectiveItemVal);
+  }
+  const est = estimateCraftingDefaults(ctx.itemId, ctx.price, effectiveItemVal);
+  if (el("craft-journal")) el("craft-journal").value = String(est.journalProfit);
+
+  if (recipeBox) {
+    recipeBox.innerHTML = `<div class="recipe-loading">Cotations matériaux Albion Data (${escapeHtml(settings.region)}) en cours pour <strong>${escapeHtml(ctx.name)}</strong>…</div>`;
+    recipeBox.hidden = false;
+  }
+
+  try {
+    const ingIds = [...new Set(recipe.ingredients.map((i) => i.uniqueName))];
+    const matSummarized = await fetchPriceRows(ingIds, [1, 2]);
+    if (seq !== recipePriceSeq) return;
+
+    const evalRes = computeRecipeMaterialCosts(recipe, matSummarized);
+    if (el("craft-mat-ret")) el("craft-mat-ret").value = String(evalRes.returnablePerUnit);
+    if (el("craft-mat-art")) el("craft-mat-art").value = String(evalRes.nonReturnablePerUnit);
+
+    renderRecipeBreakdown(recipe, evalRes);
+
+    if (note) {
+      note.textContent =
+        evalRes.missingCount === 0
+          ? `Recette exacte items.xml (${settings.region}) — ${evalRes.pricedCount}/${evalRes.lines.length} matériaux cotés en direct`
+          : `Recette items.xml (${settings.region}) — ${evalRes.pricedCount}/${evalRes.lines.length} matériaux cotés (${evalRes.missingCount} non coté(s), vérifiez le coût)`;
+      note.classList.add("is-highlighted");
+    }
+    await updateCraftingSimulation();
+    if (showFeedbackToast) {
+      showToast(
+        `Recette chargée : ${ctx.name} — RRR ${formatExactInt(evalRes.returnablePerUnit)} Ag${evalRes.nonReturnablePerUnit > 0 ? ` • Artefact ${formatExactInt(evalRes.nonReturnablePerUnit)} Ag` : ""}`,
+      );
+    }
+  } catch (err) {
+    if (seq !== recipePriceSeq) return;
+    if (el("craft-mat-ret")) el("craft-mat-ret").value = String(est.returnableCost);
+    if (el("craft-mat-art")) el("craft-mat-art").value = String(est.artefactCost);
+    renderRecipeBreakdown(recipe, null);
+    if (note) {
+      note.textContent = `Recette items.xml chargée (${ctx.name}) — API matériaux hors-ligne (${err.message || err}), coûts estimés`;
+      note.classList.add("is-highlighted");
+    }
+    await updateCraftingSimulation();
+  } finally {
+    if (seq === recipePriceSeq && refreshBtn) refreshBtn.disabled = false;
+  }
+};
+
 const prefillCraftingFromItem = (itemId) => {
   const row = lastPriceRows.find((r) => r.itemId === itemId);
   if (!row) return;
@@ -1132,20 +1362,9 @@ const prefillCraftingFromItem = (itemId) => {
   if (price > 0) el("craft-sell").value = String(Math.round(price));
   if (row.info?.itemValue > 0) el("craft-item-val").value = String(row.info.itemValue);
 
-  const est = estimateCraftingDefaults(itemId, price, itemVal);
-  if (el("craft-mat-ret")) el("craft-mat-ret").value = String(est.returnableCost);
-  if (el("craft-mat-art")) el("craft-mat-art").value = String(est.artefactCost);
-  if (el("craft-journal")) el("craft-journal").value = String(est.journalProfit);
-
-  const note = el("craft-prefill-note");
-  if (note) {
-    note.textContent = `Pré-rempli pour ${name} — coûts matériaux estimés, ajustez-les à vos prix d'achat réels`;
-    note.classList.add("is-highlighted");
-  }
-
-  updateCraftingSimulation();
+  activeCraftItemContext = { itemId, name, price, itemVal };
   el("craft-form")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  showToast(`Calculateur mis à jour : ${name}${price > 0 ? ` (${formatExactInt(price)} Ag)` : ""}`);
+  loadAndPriceCraftingRecipe(activeCraftItemContext, true);
 };
 
 const addTrackedItem = async (item) => {
@@ -1214,28 +1433,32 @@ const runMarketSearch = async (query) => {
 const syncCatalogFromGitHub = async () => {
   const btn = el("btn-sync-catalog");
   if (btn) btn.disabled = true;
-  showToast("Synchronisation de la base Albion (ao-bin-dumps : objets, zones et sorts)…");
+  showToast("Synchronisation de la base Albion (ao-bin-dumps : objets, recettes, zones et sorts)…");
   try {
     const base = "https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master";
-    const [itemsResp, worldResp, spellsResp] = await Promise.all([
+    const [itemsResp, worldResp, spellsResp, itemsXmlResp] = await Promise.all([
       fetch(`${base}/formatted/items.json`),
       fetch(`${base}/formatted/world.json`).catch(() => null),
       fetch(`${base}/spells.xml`).catch(() => null),
+      fetch(`${base}/items.xml`).catch(() => null),
     ]);
     if (!itemsResp.ok) throw new Error(`HTTP ${itemsResp.status}`);
     const itemsText = await itemsResp.text();
     const worldText = worldResp && worldResp.ok ? await worldResp.text() : null;
     const spellsText = spellsResp && spellsResp.ok ? await spellsResp.text() : null;
+    const itemsXmlText = itemsXmlResp && itemsXmlResp.ok ? await itemsXmlResp.text() : null;
     const added = await invokeCmd("import_ao_bin_dumps", {
       jsonText: itemsText,
       worldJson: worldText,
       spellsXml: spellsText,
+      itemsXml: itemsXmlText,
     });
     itemInfoCache.clear();
     await refreshState(true);
     const spellCount = latestState?.snapshot?.catalogSpellCount || 0;
+    const recipeCount = latestState?.snapshot?.catalogRecipeCount || 0;
     showToast(
-      `Catalogue synchronisé (+${formatExactInt(added || 0)} entrées, ${formatExactInt(spellCount)} sorts).`,
+      `Catalogue synchronisé (+${formatExactInt(added || 0)} entrées, ${formatExactInt(spellCount)} sorts, ${formatExactInt(recipeCount)} recettes).`,
     );
   } catch (err) {
     showToast(`Échec synchronisation ao-bin-dumps : ${err.message || err}`);
@@ -1292,8 +1515,10 @@ const computeStateSignature = (res) => {
     c?.needsElevation ? 1 : 0,
     s.catalogItemCount || 0,
     s.catalogSpellCount || 0,
+    s.catalogRecipeCount || 0,
     res?.clickThrough ? 1 : 0,
     s.snapshots?.length || 0,
+    s.archivedSessions?.length || 0,
     s.localPlayer?.inCombat ? Math.floor(s.combatSeconds || 0) : 0,
   ].join(":");
 };
@@ -1472,6 +1697,30 @@ const initEvents = () => {
     }
   });
 
+  el("btn-archive-session")?.addEventListener("click", async () => {
+    const archived = await invokeCmd("archive_session", { label: null });
+    if (archived) {
+      await refreshState(true);
+      showToast(
+        `Session enregistrée : ${archived.label} (${formatNumber(archived.fame)} Fame • ${formatNumber(archived.silver)} Ag).`,
+      );
+    } else {
+      showToast("Aucune activité de session à enregistrer pour le moment.");
+    }
+  });
+
+  el("archived-session-rows")?.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("[data-del-archived-session]");
+    if (!btn) return;
+    const id = btn.getAttribute("data-del-archived-session");
+    if (!id) return;
+    const deleted = await invokeCmd("delete_archived_session", { id });
+    if (deleted) {
+      await refreshState(true);
+      showToast("Session archivée supprimée.");
+    }
+  });
+
   el("btn-reset-session")?.addEventListener("click", async () => {
     const res = await invokeCmd("reset_session");
     if (res) {
@@ -1495,13 +1744,29 @@ const initEvents = () => {
   });
 
   // Crafting calculator reactive inputs
-  el("craft-form")?.addEventListener("input", () => {
+  el("craft-form")?.addEventListener("input", (ev) => {
+    if (ev.target?.id === "craft-name") {
+      activeCraftItemContext = null;
+      const refreshBtn = el("btn-refresh-recipe-prices");
+      const recipeBox = el("craft-recipe-box");
+      if (refreshBtn) refreshBtn.hidden = true;
+      if (recipeBox) recipeBox.hidden = true;
+    }
     updateCraftingSimulation();
+  });
+
+  el("btn-refresh-recipe-prices")?.addEventListener("click", () => {
+    if (activeCraftItemContext) {
+      loadAndPriceCraftingRecipe(activeCraftItemContext, true);
+    }
   });
 
   el("market-region")?.addEventListener("change", (ev) => {
     settings.region = ev.target.value || "europe";
     persistSettings();
+    if (activeCraftItemContext) {
+      loadAndPriceCraftingRecipe(activeCraftItemContext, false);
+    }
   });
 
   el("btn-fetch-prices")?.addEventListener("click", () => {

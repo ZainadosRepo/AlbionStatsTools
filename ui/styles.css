@@ -1593,6 +1593,176 @@ input[type="number"]:focus {
   font-weight: 600;
 }
 
+/* Live Recipe Ingredients Breakdown (items.xml + Albion Data Project) */
+.craft-recipe-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-input);
+  min-width: 0;
+}
+
+.recipe-loading {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.recipe-loading strong {
+  color: var(--accent-bright);
+}
+
+.recipe-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.recipe-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.recipe-id-tag {
+  font-size: 9.5px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recipe-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.recipe-ing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recipe-ing-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+  padding: 3px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.045);
+  font-size: 11px;
+  min-width: 0;
+}
+
+.recipe-ing-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.recipe-ing-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 160px;
+}
+
+.recipe-ing-qty {
+  font-weight: 700;
+  color: var(--accent-bright);
+  flex-shrink: 0;
+}
+
+.recipe-ing-name {
+  color: var(--text-main);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.rrr-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.rrr-tag.is-ret {
+  background: rgba(63, 191, 134, 0.13);
+  color: var(--heal);
+  border: 1px solid rgba(63, 191, 134, 0.28);
+}
+
+.rrr-tag.is-nonret {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  border: 1px solid var(--accent-border);
+}
+
+.rrr-tag.is-missing {
+  background: rgba(224, 92, 92, 0.12);
+  color: #eb7d7d;
+  border: 1px solid rgba(224, 92, 92, 0.26);
+}
+
+.recipe-ing-right {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.recipe-unit-price {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.recipe-line-total {
+  color: var(--text-main);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.session-stat-stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.2;
+}
+
+.session-stat-sub {
+  font-size: 9.5px;
+  color: var(--text-dim);
+}
+
 /* Craft Results & Transparent Cost Ledger */
 .craft-dashboard {
   display: flex;

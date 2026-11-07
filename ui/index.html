@@ -193,6 +193,11 @@
         <symbol id="ico-spell-buff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 3.5L19 6.5v5.2c0 4.6-2.9 7.6-7 9.1-4.1-1.5-7-4.5-7-9.1V6.5l7-3Z" />
         </symbol>
+        <symbol id="ico-archive" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="2.6" width="12" height="3" rx="0.9" />
+          <path d="M3 5.6v7a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-7" />
+          <path d="M6.2 8.8l1.4 1.4 2.6-2.6" />
+        </symbol>
       </defs>
     </svg>
 
@@ -436,9 +441,18 @@
               <span class="metric-chip">Événements <strong id="sess-events">0</strong></span>
             </div>
             <div class="toolbar-buttons">
+              <button
+                id="btn-archive-session"
+                class="btn btn-primary"
+                type="button"
+                title="Enregistrer le bilan de cette session sur le disque (session_history.json) et démarrer une nouvelle session"
+              >
+                <svg class="ico"><use href="#ico-archive"></use></svg>
+                <span>Terminer &amp; enregistrer</span>
+              </button>
               <button id="btn-reset-session" class="btn btn-danger" type="button">
                 <svg class="ico"><use href="#ico-reset"></use></svg>
-                <span>Réinitialiser la session</span>
+                <span>Réinitialiser</span>
               </button>
             </div>
           </div>
@@ -480,12 +494,25 @@
             </article>
           </div>
 
-          <div class="panel">
-            <div class="panel-header">
-              <h2>Guerre de Factions</h2>
-              <span class="sub-inline">Jetons, rang et points de drapeau</span>
+          <div class="combat-grid">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Sessions Enregistrées</h2>
+                  <span class="sub-label">Sauvegarde auto à la fermeture &amp; dans session_history.json</span>
+                </div>
+                <span id="archived-session-badge" class="badge-subtle">0 session</span>
+              </div>
+              <div id="archived-session-rows" class="table-wrap"></div>
             </div>
-            <div id="faction-rows" class="table-wrap"></div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Guerre de Factions</h2>
+                <span class="sub-inline">Jetons, rang et points de drapeau</span>
+              </div>
+              <div id="faction-rows" class="table-wrap"></div>
+            </div>
           </div>
         </section>
 
@@ -572,6 +599,16 @@
                   <h2>Calculateur d'Artisanat (RRR) &amp; Coûts</h2>
                   <span id="craft-prefill-note" class="sub-label">Simulation exacte des retours ressources, taxes station et marché</span>
                 </div>
+                <button
+                  id="btn-refresh-recipe-prices"
+                  class="btn btn-secondary btn-sm"
+                  type="button"
+                  title="Réinterroger les prix réels des matières premières sur Albion Data Project"
+                  hidden
+                >
+                  <svg class="ico"><use href="#ico-refresh"></use></svg>
+                  <span>Prix matériaux</span>
+                </button>
               </div>
 
               <form id="craft-form" class="craft-form-layout">
@@ -670,6 +707,7 @@
                 </div>
               </form>
 
+              <div id="craft-recipe-box" class="craft-recipe-box" hidden></div>
               <div id="craft-result" class="craft-result"></div>
             </div>
 
