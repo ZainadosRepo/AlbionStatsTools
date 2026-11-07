@@ -8,6 +8,8 @@ import {
   formatExactInt,
   formatMeterClipboard,
   formatNumber,
+  getCityBadgeInfo,
+  parseItemTierAndEnchantment,
   rankMeterPlayers,
   summarizeMarketPrices,
 } from "./meter.js";
@@ -53,10 +55,32 @@ const escapeHtml = (str) =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 
+const renderCityBadge = (cityName) => {
+  const info = getCityBadgeInfo(cityName);
+  if (!info) return `<span class="dash-empty">—</span>`;
+  return `<span class="city-pill city-${info.key}">${info.icon} ${escapeHtml(info.label)}</span>`;
+};
+
 const renderItemThumb = (uniqueName, size = 36, cls = "item-icon-sm") => {
   const url = buildAlbionItemIconUrl(uniqueName, size);
   if (!url) return "";
   return `<img class="${cls}" src="${escapeHtml(url)}" alt="" loading="lazy" onerror="this.hidden=true" />`;
+};
+
+const renderItemThumbWithTier = (uniqueName, size = 38) => {
+  const url = buildAlbionItemIconUrl(uniqueName, size);
+  if (!url) return "";
+  const meta = parseItemTierAndEnchantment(uniqueName);
+  const tierCls = meta.tier ? `tier-box-${meta.tier}` : "";
+  const tierBadge = meta.label ? `<span class="tier-chip ${meta.tier ? `tier-${meta.tier}` : ""}">${meta.label}</span>` : "";
+  const enchBadge = meta.enchantment > 0 ? `<span class="ench-dot ench-${meta.enchantment}" title="Enchantement .${meta.enchantment}"></span>` : "";
+  return `
+    <div class="item-thumb-box ${tierCls}">
+      <img class="item-thumb-img" src="${escapeHtml(url)}" alt="" loading="lazy" onerror="this.hidden=true" />
+      ${tierBadge}
+      ${enchBadge}
+    </div>
+  `;
 };
 
 const renderSpellThumb = (uniqueName, size = 32) => {
@@ -142,7 +166,7 @@ const renderHeader = () => {
   if (badge && cap) {
     const isLive = cap.mode === "rawSocket";
     badge.className = `status-badge ${isLive ? "status-live" : "status-standby"}`;
-    badge.textContent = isLive ? "● Capture UDP 5056" : "● Prêt / Simulateur";
+    badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">${isLive ? "Capture UDP 5056" : "Prêt / Simulateur"}</span>`;
     badge.title = cap.detail || "";
   }
 
@@ -168,9 +192,11 @@ const renderHeader = () => {
 
   const lp = snap.localPlayer;
   const guildTag = lp.guildName ? ` [${lp.guildName}]` : "";
-  el("header-player-name").textContent = `${lp.username}${guildTag}`;
-  el("header-map-name").textContent = lp.currentMapNameFr;
-  el("header-silver").textContent = `${formatNumber(lp.silver)} Ag`;
+  const rawName = String(lp.username || "En attente…");
+  const displayName = rawName.startsWith("En attente") ? "En attente…" : `${rawName}${guildTag}`;
+  el("header-player-name").textContent = displayName;
+  el("header-map-name").textContent = lp.currentMapNameFr || "Caerleon";
+  el("header-silver").textContent = `${formatExactInt(lp.silver)} Ag`;
 };
 
 const renderSnapshotSelect = () => {
@@ -219,12 +245,20 @@ const renderCombatTab = () => {
     .map((p) => {
       const isSel = p.name === selectedPlayerName;
       const weaponThumb = renderItemThumb(p.weaponUniqueName, 44, "item-icon");
+      const rankBadge =
+        p.rank === 1
+          ? `<span class="meter-rank rank-1" title="1er">🥇</span>`
+          : p.rank === 2
+            ? `<span class="meter-rank rank-2" title="2e">🥈</span>`
+            : p.rank === 3
+              ? `<span class="meter-rank rank-3" title="3e">🥉</span>`
+              : `<span class="meter-rank">#${p.rank}</span>`;
       return `
         <div class="meter-row ${isSel ? "selected" : ""}" data-player-name="${escapeHtml(p.name)}">
           <div class="meter-bar-fill meter-bar-${escapeHtml(settings.meterMode)}" style="width: ${p.barPercent.toFixed(1)}%"></div>
           <div class="meter-row-content">
             <div class="meter-left">
-              <span class="meter-rank">${p.rank}</span>
+              ${rankBadge}
               ${weaponThumb}
               <div class="meter-ident">
                 <span class="meter-name">${escapeHtml(p.name)} ${p.isSelf ? "★" : ""}</span>
@@ -540,8 +574,18 @@ const renderCapturedMarketOrders = () => {
   if (!snap) return;
   const orders = snap.marketOrders || [];
   const mails = snap.mailNotifications || [];
+  const total = orders.length + mails.length;
+  const badge = el("market-orders-badge");
+  if (badge) badge.textContent = `${total} capture${total > 1 ? "s" : ""}`;
+
   if (orders.length === 0 && mails.length === 0) {
-    el("captured-market-rows").innerHTML = `<div class="empty-state">Aucun ordre ou courrier du marché capturé.</div>`;
+    el("captured-market-rows").innerHTML = `
+      <div class="empty-state empty-market-state">
+        <span class="empty-icon" aria-hidden="true">📜</span>
+        <div class="empty-title">Aucun ordre ou courrier du marché capturé</div>
+        <div class="empty-hint">Consultez l'hôtel des ventes ou ouvrez votre boîte aux lettres en jeu pour capturer automatiquement vos transactions.</div>
+      </div>
+    `;
     return;
   }
 
@@ -561,16 +605,16 @@ const renderCapturedMarketOrders = () => {
           .map(
             (o) => `
           <tr>
-            <td><span class="badge-subtle">${o.isRequest ? "Achat" : "Offre Q" + o.qualityLevel}</span></td>
+            <td><span class="badge-subtle ${o.isRequest ? "badge-buy-order" : "badge-sell-order"}">${o.isRequest ? "Demande d'Achat" : "Vente Q" + o.qualityLevel}</span></td>
             <td>
               <span class="cell-with-icon">
-                ${renderItemThumb(o.itemUniqueName, 36)}
+                ${renderItemThumbWithTier(o.itemUniqueName, 36)}
                 <strong>${escapeHtml(o.itemNameFr)}</strong>
               </span>
             </td>
-            <td>×${o.amount}</td>
-            <td>${formatExactInt(o.unitPriceSilver)} Ag</td>
-            <td>${formatExactInt(o.totalPriceSilver)} Ag</td>
+            <td><span class="qty-pill">×${o.amount}</span></td>
+            <td><span class="silver-amount">${formatExactInt(o.unitPriceSilver)} <span class="ag-tag">Ag</span></span></td>
+            <td><strong class="silver-amount">${formatExactInt(o.totalPriceSilver)} <span class="ag-tag">Ag</span></strong></td>
           </tr>
         `,
           )
@@ -582,13 +626,13 @@ const renderCapturedMarketOrders = () => {
             <td><span class="status-badge status-live">Courrier Vendu</span></td>
             <td>
               <span class="cell-with-icon">
-                ${renderItemThumb(m.itemUniqueName, 36)}
+                ${renderItemThumbWithTier(m.itemUniqueName, 36)}
                 <strong>${escapeHtml(m.itemNameFr)}</strong>
               </span>
             </td>
-            <td>×${m.amount}</td>
-            <td>${formatExactInt(m.unitPriceSilver)} Ag</td>
-            <td>${formatExactInt(m.totalPriceSilver)} Ag</td>
+            <td><span class="qty-pill">×${m.amount}</span></td>
+            <td><span class="silver-amount">${formatExactInt(m.unitPriceSilver)} <span class="ag-tag">Ag</span></span></td>
+            <td><strong class="silver-amount text-gold">${formatExactInt(m.totalPriceSilver)} <span class="ag-tag">Ag</span></strong></td>
           </tr>
         `,
           )
@@ -599,27 +643,39 @@ const renderCapturedMarketOrders = () => {
 };
 
 const updateCraftingSimulation = async () => {
+  const matRetVal = Math.max(0, Number(el("craft-mat-ret")?.value) || 0);
+  const matArtVal = Math.max(0, Number(el("craft-mat-art")?.value) || 0);
+  const sellVal = Math.max(0, Number(el("craft-sell")?.value) || 0);
+  const qty = Math.max(1, Number(el("craft-qty")?.value) || 1);
+  const bonusVal = Math.max(0, Number(el("craft-bonus")?.value) || 0);
+
+  // Sync active state on preset pills
+  document.querySelectorAll(".preset-pill[data-preset-bonus]").forEach((b) => {
+    const val = Number(b.getAttribute("data-preset-bonus"));
+    b.classList.toggle("active", Math.abs(val - bonusVal) < 0.05);
+  });
+
   const input = {
-    itemName: el("craft-name").value || "Objet",
-    craftQuantity: Math.max(1, Number(el("craft-qty").value) || 1),
-    sellUnitPrice: Math.max(0, Number(el("craft-sell").value) || 0),
-    itemValue: Math.max(0, Number(el("craft-item-val").value) || 0),
-    productionBonusPercent: Math.max(0, Number(el("craft-bonus").value) || 0),
-    usageFeePer100Nutrition: Math.max(0, Number(el("craft-fee").value) || 0),
-    isPremium: Boolean(el("craft-premium").checked),
-    isSellOrder: Boolean(el("craft-sell-order").checked),
-    journalProfitPerItem: Math.max(0, Number(el("craft-journal").value) || 0),
+    itemName: el("craft-name")?.value || "Objet",
+    craftQuantity: qty,
+    sellUnitPrice: sellVal,
+    itemValue: Math.max(0, Number(el("craft-item-val")?.value) || 0),
+    productionBonusPercent: bonusVal,
+    usageFeePer100Nutrition: Math.max(0, Number(el("craft-fee")?.value) || 0),
+    isPremium: Boolean(el("craft-premium")?.checked),
+    isSellOrder: Boolean(el("craft-sell-order")?.checked),
+    journalProfitPerItem: Math.max(0, Number(el("craft-journal")?.value) || 0),
     materials: [
       {
         name: "Ressources principales",
         quantityPerItem: 1,
-        unitPrice: Math.max(0, Number(el("craft-mat-ret").value) || 0),
+        unitPrice: matRetVal,
         isReturnable: true,
       },
       {
         name: "Artefact / Cœur",
         quantityPerItem: 1,
-        unitPrice: Math.max(0, Number(el("craft-mat-art").value) || 0),
+        unitPrice: matArtVal,
         isReturnable: false,
       },
     ],
@@ -628,22 +684,100 @@ const updateCraftingSimulation = async () => {
   const res = await invokeCmd("calculate_crafting", { input });
   if (!res) return;
 
-  const profitColor = res.netProfitPerItem >= 0 ? "#56e39f" : "#ff7b7b";
+  const isProfitable = res.totalBatchProfit >= 0;
+  const rrrPct = (res.resourceReturnRate * 100).toFixed(2);
+  const totalStationFee = Math.round(res.stationFeePerItem * res.craftQuantity);
+  const totalMarketFee = Math.round(res.marketFeePerItem * res.craftQuantity);
+  const totalGrossRevenue = Math.round(sellVal * res.craftQuantity);
+  const totalNetRevenue = Math.round(res.totalBatchRevenue);
+  const totalCost = Math.round(res.totalBatchCost);
+  const roiPercent = totalCost > 0 ? (res.totalBatchProfit / totalCost) * 100 : 0;
+  const savedMaterialsAg = Math.round(res.resourceReturnRate * (matRetVal * res.craftQuantity));
+
+  // Stacked breakdown proportions
+  const budgetBase = Math.max(totalGrossRevenue, totalCost + totalStationFee + totalMarketFee, 1);
+  const matCostTotal = Math.round(res.netMaterialCostPerItem * res.craftQuantity);
+  const matShare = Math.min(100, Math.max(4, (matCostTotal / budgetBase) * 100));
+  const feeShare = Math.min(100, Math.max(2, ((totalStationFee + totalMarketFee) / budgetBase) * 100));
+  const profitShare = isProfitable ? Math.max(0, Math.min(100, 100 - matShare - feeShare)) : 0;
+
   el("craft-result").innerHTML = `
-    <div>
-      <div class="kpi-label">Taux de Retour (RRR)</div>
-      <strong>${(res.resourceReturnRate * 100).toFixed(2)}%</strong>
-      <div class="kpi-foot">Taxe station : ${formatExactInt(res.stationFeePerItem)} Ag</div>
-    </div>
-    <div>
-      <div class="kpi-label">Coût de Revient Net / u</div>
-      <strong>${formatExactInt(res.totalCostPerItem)} Ag</strong>
-      <div class="kpi-foot">Taxe marché : ${(res.marketTaxRate * 100).toFixed(1)}%</div>
-    </div>
-    <div>
-      <div class="kpi-label">Profit Net Lot (×${res.craftQuantity})</div>
-      <strong style="color:${profitColor}">${formatExactInt(res.totalBatchProfit)} Ag</strong>
-      <div class="kpi-foot">Marge : ${res.marginPercent.toFixed(1)}% (${formatExactInt(res.netProfitPerItem)}/u)</div>
+    <div class="craft-dashboard">
+      <!-- Hero Profit Banner -->
+      <div class="craft-hero ${isProfitable ? "is-profit" : "is-loss"}">
+        <div class="craft-hero-left">
+          <div class="craft-hero-tag">
+            <span class="hero-dot"></span>
+            PROFIT NET TOTAL (${res.craftQuantity} ${res.craftQuantity > 1 ? "unités" : "unité"})
+          </div>
+          <div class="craft-hero-main">
+            <span class="hero-num">${isProfitable ? "+" : ""}${formatExactInt(res.totalBatchProfit)}</span>
+            <span class="hero-unit">Ag</span>
+          </div>
+          <div class="craft-hero-sub">
+            <span class="chip-unit-profit">${isProfitable ? "+" : ""}${formatExactInt(res.netProfitPerItem)} Ag / u</span>
+            <span class="hero-sep">•</span>
+            <span class="chip-roi">ROI <strong>${roiPercent >= 0 ? "+" : ""}${roiPercent.toFixed(1)}%</strong></span>
+          </div>
+        </div>
+        <div class="craft-hero-badge ${isProfitable ? "badge-profit" : "badge-loss"}">
+          <span class="badge-arb-icon">${isProfitable ? "▲" : "▼"}</span>
+          <span class="badge-status-title">${isProfitable ? "RENTABLE" : "DÉFICITAIRE"}</span>
+          <span class="badge-margin-tag">Marge ${res.marginPercent.toFixed(1)}%</span>
+        </div>
+      </div>
+
+      <!-- Key Metrics 4-Card Grid -->
+      <div class="craft-kpi-grid">
+        <div class="craft-kpi-item">
+          <div class="kpi-item-head">
+            <span class="kpi-item-label">Taux de Retour (RRR)</span>
+            <span class="kpi-item-badge rrr-badge">${rrrPct}%</span>
+          </div>
+          <div class="rrr-progress-bar">
+            <div class="rrr-progress-fill" style="width: ${Math.min(100, (res.resourceReturnRate / 0.539) * 100).toFixed(1)}%"></div>
+          </div>
+          <div class="kpi-item-foot">Économie mat. : <strong>~${formatExactInt(savedMaterialsAg)} Ag</strong></div>
+        </div>
+
+        <div class="craft-kpi-item">
+          <div class="kpi-item-head">
+            <span class="kpi-item-label">Coût de Revient / u</span>
+            <span class="kpi-item-val">${formatExactInt(res.totalCostPerItem)} Ag</span>
+          </div>
+          <div class="kpi-item-foot">Coût total lot : <strong>${formatExactInt(totalCost)} Ag</strong></div>
+        </div>
+
+        <div class="craft-kpi-item">
+          <div class="kpi-item-head">
+            <span class="kpi-item-label">Vente Nette Lot</span>
+            <span class="kpi-item-val text-gold">${formatExactInt(totalNetRevenue)} Ag</span>
+          </div>
+          <div class="kpi-item-foot">Vente brute : <strong>${formatExactInt(totalGrossRevenue)} Ag</strong></div>
+        </div>
+
+        <div class="craft-kpi-item">
+          <div class="kpi-item-head">
+            <span class="kpi-item-label">Frais Station &amp; Marché</span>
+            <span class="kpi-item-val text-dim">${formatExactInt(totalStationFee + totalMarketFee)} Ag</span>
+          </div>
+          <div class="kpi-item-foot">Station : ${formatExactInt(totalStationFee)} Ag • Marché (${(res.marketTaxRate * 100).toFixed(1)}%) : ${formatExactInt(totalMarketFee)} Ag</div>
+        </div>
+      </div>
+
+      <!-- Visual Breakdown Bar -->
+      <div class="craft-breakdown-box">
+        <div class="breakdown-bar">
+          <div class="breakdown-seg seg-mat" style="width: ${matShare.toFixed(1)}%" title="Matériaux nets: ${matShare.toFixed(1)}%"></div>
+          <div class="breakdown-seg seg-fee" style="width: ${feeShare.toFixed(1)}%" title="Taxes &amp; station: ${feeShare.toFixed(1)}%"></div>
+          ${isProfitable ? `<div class="breakdown-seg seg-profit" style="width: ${profitShare.toFixed(1)}%" title="Profit net: ${profitShare.toFixed(1)}%"></div>` : ""}
+        </div>
+        <div class="breakdown-legend">
+          <span class="leg-entry"><span class="leg-dot dot-mat"></span> Matériaux (${matShare.toFixed(0)}%)</span>
+          <span class="leg-entry"><span class="leg-dot dot-fee"></span> Taxes (${feeShare.toFixed(0)}%)</span>
+          ${isProfitable ? `<span class="leg-entry"><span class="leg-dot dot-profit"></span> Profit Net (${profitShare.toFixed(0)}%)</span>` : ""}
+        </div>
+      </div>
     </div>
   `;
 };
@@ -729,7 +863,7 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
       return;
     }
     wrap.innerHTML = `
-      <table class="data-table">
+      <table class="data-table market-data-table">
         <thead>
           <tr>
             <th>Objet</th>
@@ -746,26 +880,57 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
               const name = r.info?.nameFr || r.itemId;
               const hasSell = r.bestSellPrice > 0;
               const hasBuy = r.bestBuyOrder > 0;
+              const hasSpread = hasSell && hasBuy;
+              const isProfitSpread = hasSpread && r.spreadSilver > 0;
+              const thumb = renderItemThumbWithTier(r.itemId, 40);
+
+              let arbHtml = `<span class="dash-empty">—</span>`;
+              if (hasSpread) {
+                arbHtml = `
+                  <div class="arbitrage-pill ${isProfitSpread ? "arb-profit" : "arb-loss"}">
+                    <span class="arb-arrow">${isProfitSpread ? "▲" : "▼"}</span>
+                    <span class="arb-val">${isProfitSpread ? "+" : ""}${formatExactInt(r.spreadSilver)} Ag</span>
+                    <span class="arb-pct">(${isProfitSpread ? "+" : ""}${r.spreadPercent.toFixed(1)}%)</span>
+                  </div>
+                `;
+              }
+
               return `
             <tr>
               <td>
-                <span class="cell-with-icon">
-                  ${renderItemThumb(r.itemId, 36)}
-                  <span>
-                    <strong>${escapeHtml(name)}</strong>
+                <div class="cell-with-icon item-cell">
+                  ${thumb}
+                  <div class="item-text-group">
+                    <strong class="item-display-name">${escapeHtml(name)}</strong>
                     ${name !== r.itemId ? `<span class="item-id-sub">${escapeHtml(r.itemId)}</span>` : ""}
-                  </span>
-                </span>
+                  </div>
+                </div>
               </td>
-              ${isSession ? `<td>×${formatExactInt(qtyByItem[r.itemId] || 0)}</td>` : ""}
-              <td>${hasSell ? `${formatExactInt(r.bestSellPrice)} Ag (${escapeHtml(r.bestSellCity)})` : "—"}</td>
-              <td>${hasBuy ? `${formatExactInt(r.bestBuyOrder)} Ag (${escapeHtml(r.bestBuyCity)})` : "—"}</td>
-              <td>${hasSell && hasBuy ? `${formatExactInt(r.spreadSilver)} Ag (${r.spreadPercent.toFixed(1)}%)` : "—"}</td>
+              ${isSession ? `<td class="qty-cell">×${formatExactInt(qtyByItem[r.itemId] || 0)}</td>` : ""}
               <td>
-                <span class="row-actions">
-                  <button class="btn btn-secondary btn-xs" type="button" data-craft-item="${escapeHtml(r.itemId)}" title="Pré-remplir le calculateur d'artisanat avec cet objet">⚒ Craft</button>
-                  ${isSession ? "" : `<button class="btn btn-danger btn-xs" type="button" data-untrack-item="${escapeHtml(r.itemId)}" title="Retirer des objets suivis">✕</button>`}
-                </span>
+                ${hasSell ? `
+                  <div class="price-stack">
+                    <span class="silver-amount">${formatExactInt(r.bestSellPrice)} <span class="ag-tag">Ag</span></span>
+                    ${renderCityBadge(r.bestSellCity)}
+                  </div>
+                ` : `<span class="dash-empty">—</span>`}
+              </td>
+              <td>
+                ${hasBuy ? `
+                  <div class="price-stack">
+                    <span class="silver-amount">${formatExactInt(r.bestBuyOrder)} <span class="ag-tag">Ag</span></span>
+                    ${renderCityBadge(r.bestBuyCity)}
+                  </div>
+                ` : `<span class="dash-empty">—</span>`}
+              </td>
+              <td>
+                ${arbHtml}
+              </td>
+              <td>
+                <div class="row-actions">
+                  <button class="btn btn-craft btn-xs" type="button" data-craft-item="${escapeHtml(r.itemId)}" title="Pré-remplir le calculateur d'artisanat avec cet objet">⚒ Craft</button>
+                  ${isSession ? "" : `<button class="btn btn-danger-subtle btn-xs" type="button" data-untrack-item="${escapeHtml(r.itemId)}" title="Retirer des objets suivis">✕</button>`}
+                </div>
               </td>
             </tr>
           `;
@@ -1138,12 +1303,34 @@ const initEvents = () => {
     fetchAlbionDataPrices();
   });
 
+  // Preset bonus buttons (0% Île, 18% Cité, 47.9% Focus)
+  document.querySelectorAll(".preset-pill[data-preset-bonus]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const b = btn.getAttribute("data-preset-bonus");
+      const inp = el("craft-bonus");
+      if (inp && b !== null) {
+        inp.value = b;
+        updateCraftingSimulation();
+      }
+    });
+  });
+
   // Free-text market search over the (synced) catalog
   const searchInput = el("market-search-input");
+  const searchClearBtn = el("market-search-clear");
   searchInput?.addEventListener("input", (ev) => {
-    if (searchTimer) clearTimeout(searchTimer);
     const q = ev.target.value || "";
+    if (searchClearBtn) searchClearBtn.hidden = q.length === 0;
+    if (searchTimer) clearTimeout(searchTimer);
     searchTimer = setTimeout(() => runMarketSearch(q), 220);
+  });
+  searchClearBtn?.addEventListener("click", () => {
+    if (searchInput) {
+      searchInput.value = "";
+      searchClearBtn.hidden = true;
+      hideSearchResults();
+      searchInput.focus();
+    }
   });
   searchInput?.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") {
@@ -1166,6 +1353,7 @@ const initEvents = () => {
     const id = btn.getAttribute("data-add-item");
     hideSearchResults();
     if (searchInput) searchInput.value = "";
+    if (searchClearBtn) searchClearBtn.hidden = true;
     addTrackedItem(itemInfoCache.get(id) || { uniqueName: id });
   });
   document.addEventListener("click", (ev) => {

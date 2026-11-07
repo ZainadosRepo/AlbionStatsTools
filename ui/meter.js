@@ -271,3 +271,30 @@ export const computeSessionMarketValue = (summarized = [], qtyByItem = {}) => {
   }
   return { total, pricedItems };
 };
+
+export const parseItemTierAndEnchantment = (uniqueName) => {
+  const clean = String(uniqueName ?? "").trim();
+  const m = clean.match(/^T(\d+)_/);
+  const tier = m ? parseInt(m[1], 10) : null;
+  const enchMatch = clean.match(/@(\d+)$/);
+  const enchantment = enchMatch ? parseInt(enchMatch[1], 10) : 0;
+  const label = tier !== null ? `T${tier}${enchantment > 0 ? `.${enchantment}` : ""}` : "";
+  return { tier, enchantment, label };
+};
+
+export const CITY_INFO = {
+  Martlock: { key: "martlock", icon: "🛡️", label: "Martlock" },
+  Caerleon: { key: "caerleon", icon: "⚔️", label: "Caerleon" },
+  Bridgewatch: { key: "bridgewatch", icon: "🏜️", label: "Bridgewatch" },
+  Lymhurst: { key: "lymhurst", icon: "🌲", label: "Lymhurst" },
+  "Fort Sterling": { key: "fort-sterling", icon: "❄️", label: "Fort Sterling" },
+  Thetford: { key: "thetford", icon: "🌿", label: "Thetford" },
+  Brecilien: { key: "brecilien", icon: "🌸", label: "Brecilien" },
+  "Black Market": { key: "black-market", icon: "🏴", label: "Marché Noir" },
+};
+
+export const getCityBadgeInfo = (cityName) => {
+  const clean = String(cityName ?? "").trim();
+  if (!clean || clean === "-") return null;
+  return CITY_INFO[clean] || { key: "default", icon: "🏛️", label: clean };
+};

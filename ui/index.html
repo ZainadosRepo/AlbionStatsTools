@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Albion Stats</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -14,40 +17,39 @@
           <span class="brand-emblem" aria-hidden="true">⚔</span>
           <span class="brand-name" data-tauri-drag-region>Albion Stats</span>
           <span id="capture-badge" class="status-badge status-standby" title="État de la capture Photon UDP 5056">
-            Initialisation…
+            <span class="badge-dot"></span>
+            <span class="badge-text">Prêt / Simulateur</span>
           </span>
           <button id="btn-elevate" class="tb-btn tb-btn-accent" type="button" title="Relancer Albion Stats en Administrateur pour activer la capture directe sur le port UDP 5056" hidden>
-            🛡 Activer Capture Admin
+            🛡 Activer Admin
           </button>
         </div>
 
         <div id="player-pill" class="player-pill" data-tauri-drag-region>
-          <span id="header-player-name" class="player-name">En attente…</span>
+          <span class="pill-seg"><span class="pill-ico">👤</span><span id="header-player-name" class="player-name">En attente…</span></span>
           <span class="pill-sep">•</span>
-          <span id="header-map-name" class="player-map">Caerleon</span>
+          <span class="pill-seg"><span class="pill-ico">📍</span><span id="header-map-name" class="player-map">Caerleon</span></span>
           <span class="pill-sep">•</span>
-          <span id="header-silver" class="player-silver">0 Ag</span>
+          <span class="pill-seg"><span class="pill-ico">🪙</span><strong id="header-silver" class="player-silver">0 Ag</strong></span>
         </div>
 
         <div class="titlebar-actions">
-          <button id="btn-sync-catalog" class="tb-btn" type="button" title="Télécharger et mettre en cache le catalogue complet ao-bin-dumps (objets + zones + sorts)">
-            📦 Base (<span id="catalog-count">60</span>)
-          </button>
-          <button id="btn-simulate" class="tb-btn tb-btn-accent" type="button" title="Injecter un scénario réseau Photon complet (combat 5v5, brumes, récolte, butin, marché)">
-            ⚡ Simuler Session
-          </button>
-          <button id="btn-compact" class="tb-btn" type="button" title="Basculer le mode mini-overlay de combat">
+          <button id="btn-compact" class="tb-btn tb-btn-pill" type="button" title="Basculer le mode mini-overlay de combat">
             ◫ Overlay
           </button>
-          <input id="overlay-opacity" class="opacity-slider" type="range" min="35" max="100" value="96" title="Opacité de la fenêtre overlay" aria-label="Opacité de la fenêtre overlay" />
-          <button id="btn-click-through" class="tb-btn" type="button" title="Mode souris traversante (Ctrl+Alt+L pour verrouiller/déverrouiller)">
+          <div class="opacity-control" title="Opacité de la fenêtre overlay">
+            <span class="opacity-icon" aria-hidden="true">👁</span>
+            <input id="overlay-opacity" class="opacity-slider" type="range" min="35" max="100" value="96" title="Opacité de la fenêtre overlay" aria-label="Opacité de la fenêtre overlay" />
+          </div>
+          <button id="btn-click-through" class="tb-btn tb-btn-icon" type="button" title="Mode souris traversante (Ctrl+Alt+L pour verrouiller/déverrouiller)">
             👻
           </button>
-          <button id="btn-pin" class="tb-btn" type="button" title="Épingler au-dessus du jeu (Ctrl+Alt+M pour afficher/masquer)">
+          <button id="btn-pin" class="tb-btn tb-btn-icon" type="button" title="Épingler au-dessus du jeu (Ctrl+Alt+M pour afficher/masquer)">
             📌
           </button>
-          <button id="btn-min" class="tb-btn" type="button" title="Réduire">─</button>
-          <button id="btn-close" class="tb-btn tb-btn-close" type="button" title="Fermer">✕</button>
+          <div class="window-control-sep" aria-hidden="true"></div>
+          <button id="btn-min" class="tb-btn tb-btn-window" type="button" title="Réduire">─</button>
+          <button id="btn-close" class="tb-btn tb-btn-window tb-btn-close" type="button" title="Fermer">✕</button>
         </div>
       </header>
 
@@ -56,13 +58,23 @@
       </div>
 
       <!-- Navigation Bar -->
-      <nav id="main-nav" class="nav-tabs" aria-label="Sections principales">
-        <button class="nav-tab active" data-tab="combat" type="button">⚔ Combat &amp; DPS</button>
-        <button class="nav-tab" data-tab="session" type="button">📈 Session &amp; Factions</button>
-        <button class="nav-tab" data-tab="dungeons" type="button">🏰 Donjons &amp; Brumes</button>
-        <button class="nav-tab" data-tab="gathering" type="button">⛏ Récolte</button>
-        <button class="nav-tab" data-tab="loot" type="button">🎒 Butin &amp; Groupe</button>
-        <button class="nav-tab" data-tab="economy" type="button">⚖ Marché &amp; Craft</button>
+      <nav id="main-nav" class="nav-bar-container" aria-label="Sections principales">
+        <div class="nav-tabs">
+          <button class="nav-tab active" data-tab="combat" type="button">⚔ Combat &amp; DPS</button>
+          <button class="nav-tab" data-tab="session" type="button">📈 Session &amp; Factions</button>
+          <button class="nav-tab" data-tab="dungeons" type="button">🏰 Donjons &amp; Brumes</button>
+          <button class="nav-tab" data-tab="gathering" type="button">⛏ Récolte</button>
+          <button class="nav-tab" data-tab="loot" type="button">🎒 Butin &amp; Groupe</button>
+          <button class="nav-tab" data-tab="economy" type="button">⚖ Marché &amp; Craft</button>
+        </div>
+        <div class="nav-actions">
+          <button id="btn-sync-catalog" class="btn btn-secondary btn-sm" type="button" title="Télécharger et mettre en cache le catalogue complet ao-bin-dumps (objets + zones + sorts)">
+            📦 Base (<span id="catalog-count">60</span>)
+          </button>
+          <button id="btn-simulate" class="btn btn-primary btn-sm" type="button" title="Injecter un scénario réseau Photon complet (combat 5v5, brumes, récolte, butin, marché)">
+            ⚡ Simuler Session
+          </button>
+        </div>
       </nav>
 
       <div id="toast-banner" class="toast-banner" hidden></div>
@@ -243,73 +255,145 @@
         <section id="tab-economy" class="tab-panel">
           <div class="combat-grid">
             <!-- Crafting Calculator -->
-            <div class="card">
+            <div class="card craft-card">
               <div class="card-header">
-                <h2>Calculateur de Rendement d'Artisanat (RRR) &amp; Profit</h2>
+                <div>
+                  <h2>Calculateur de Rendement d'Artisanat (RRR) &amp; Profit</h2>
+                  <span class="sub-label">Simulation instantanée des marges, taxes et retours</span>
+                </div>
               </div>
-              <form id="craft-form" class="form-grid">
-                <label class="field">
-                  <span>Objet fabriqué</span>
-                  <input id="craft-name" type="text" value="Lames sculptées T7.1" required />
-                </label>
-                <label class="field">
-                  <span>Quantité produite</span>
-                  <input id="craft-qty" type="number" min="1" max="9999" value="10" required />
-                </label>
-                <label class="field">
-                  <span>Prix de vente unitaire (Ag)</span>
-                  <input id="craft-sell" type="number" min="0" step="100" value="445000" required />
-                </label>
-                <label class="field">
-                  <span>Valeur d'objet (ItemValue)</span>
-                  <input id="craft-item-val" type="number" min="0" step="10" value="5120" required />
-                </label>
-                <label class="field">
-                  <span>Bonus production (%)</span>
-                  <input id="craft-bonus" type="number" min="0" max="200" step="0.1" value="18.0" required />
-                </label>
-                <label class="field">
-                  <span>Taxe station / 100 nutr.</span>
-                  <input id="craft-fee" type="number" min="0" step="10" value="450" required />
-                </label>
-                <label class="field">
-                  <span>Coût ressources soumises au RRR</span>
-                  <input id="craft-mat-ret" type="number" min="0" step="100" value="288400" required />
-                </label>
-                <label class="field">
-                  <span>Coût artefacts (sans RRR)</span>
-                  <input id="craft-mat-art" type="number" min="0" step="100" value="85000" required />
-                </label>
-                <label class="field">
-                  <span>Gain journal par objet (Ag)</span>
-                  <input id="craft-journal" type="number" min="0" step="100" value="14500" required />
-                </label>
-                <div class="field field-checks">
-                  <label><input id="craft-premium" type="checkbox" checked /> Compte Premium (Taxe 4%)</label>
-                  <label><input id="craft-sell-order" type="checkbox" checked /> Ordre de vente (+2,5%)</label>
+              <form id="craft-form" class="craft-form-layout">
+                <div class="craft-form-section">
+                  <div class="craft-section-label">🔨 Produit &amp; Volume</div>
+                  <div class="form-row form-row-2">
+                    <label class="field">
+                      <span class="field-title">Objet fabriqué</span>
+                      <div class="input-wrap">
+                        <input id="craft-name" type="text" value="Lames sculptées T7.1" required />
+                      </div>
+                    </label>
+                    <label class="field">
+                      <span class="field-title">Quantité produite</span>
+                      <div class="input-wrap has-suffix">
+                        <input id="craft-qty" type="number" min="1" max="9999" value="10" required />
+                        <span class="input-suffix">u</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="craft-form-section">
+                  <div class="craft-section-label">💰 Prix de Vente &amp; Valeur Estimée</div>
+                  <div class="form-row form-row-3">
+                    <label class="field">
+                      <span class="field-title">Prix unitaire</span>
+                      <div class="input-wrap has-suffix">
+                        <input id="craft-sell" type="number" min="0" step="100" value="445000" required />
+                        <span class="input-suffix currency-silver">Ag</span>
+                      </div>
+                    </label>
+                    <label class="field">
+                      <span class="field-title">Valeur (ItemValue)</span>
+                      <div class="input-wrap">
+                        <input id="craft-item-val" type="number" min="0" step="10" value="5120" required />
+                      </div>
+                    </label>
+                    <label class="field">
+                      <span class="field-title">Gain journal / u</span>
+                      <div class="input-wrap has-suffix">
+                        <input id="craft-journal" type="number" min="0" step="100" value="14500" required />
+                        <span class="input-suffix currency-silver">Ag</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="craft-form-section">
+                  <div class="craft-section-label">⚖️ Station &amp; Bonus de Production (RRR)</div>
+                  <div class="form-row form-row-2">
+                    <div class="field">
+                      <div class="field-header-row">
+                        <span class="field-title">Bonus production (%)</span>
+                        <div class="preset-pill-group">
+                          <button type="button" class="preset-pill" data-preset-bonus="0" title="Sans bonus (Île personnelle ou guilde sans zone)">0%</button>
+                          <button type="button" class="preset-pill active" data-preset-bonus="18.0" title="Bonus classique de cité royale (18.0% = 15.25% RRR)">18% Cité</button>
+                          <button type="button" class="preset-pill" data-preset-bonus="47.9" title="Bonus avec point de focalisation (47.9% = 32.39% RRR)">47.9% Focus</button>
+                        </div>
+                      </div>
+                      <div class="input-wrap has-suffix">
+                        <input id="craft-bonus" type="number" min="0" max="200" step="0.1" value="18.0" required />
+                        <span class="input-suffix">%</span>
+                      </div>
+                    </div>
+                    <label class="field">
+                      <span class="field-title">Taxe station / 100 nutr.</span>
+                      <div class="input-wrap has-suffix">
+                        <input id="craft-fee" type="number" min="0" step="10" value="450" required />
+                        <span class="input-suffix currency-silver">Ag</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="craft-form-section">
+                  <div class="craft-section-label">🧱 Coûts des Composants</div>
+                  <div class="form-row form-row-2">
+                    <label class="field">
+                      <span class="field-title">Ressources avec RRR</span>
+                      <div class="input-wrap has-suffix">
+                        <input id="craft-mat-ret" type="number" min="0" step="100" value="288400" required />
+                        <span class="input-suffix currency-silver">Ag</span>
+                      </div>
+                    </label>
+                    <label class="field">
+                      <span class="field-title">Artefacts (sans RRR)</span>
+                      <div class="input-wrap has-suffix">
+                        <input id="craft-mat-art" type="number" min="0" step="100" value="85000" required />
+                        <span class="input-suffix currency-silver">Ag</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="craft-toggles">
+                  <label class="toggle-chip">
+                    <input id="craft-premium" type="checkbox" checked />
+                    <span class="toggle-box"></span>
+                    <span class="toggle-label">Compte Premium <strong>(Taxe 4%)</strong></span>
+                  </label>
+                  <label class="toggle-chip">
+                    <input id="craft-sell-order" type="checkbox" checked />
+                    <span class="toggle-box"></span>
+                    <span class="toggle-label">Ordre de vente <strong>(+2,5%)</strong></span>
+                  </label>
                 </div>
               </form>
               <div id="craft-result" class="craft-result"></div>
             </div>
 
             <!-- Market Price Fetcher & Live Captures -->
-            <div class="card">
+            <div class="card market-card">
               <div class="card-header">
-                <h2>Prix Albion Data Project &amp; Ordres Capturés</h2>
+                <div>
+                  <h2>Prix Albion Data Project &amp; Arbitrage</h2>
+                  <span class="sub-label">Cotations multi-cités et suivi des opportunités</span>
+                </div>
                 <div class="inline-controls">
                   <select id="market-region" class="select-input" aria-label="Serveur Albion Data Project">
-                    <option value="europe">Serveur Europe</option>
-                    <option value="west">Serveur Amériques</option>
-                    <option value="east">Serveur Asie</option>
+                    <option value="europe">🌍 Serveur Europe</option>
+                    <option value="west">🌎 Serveur Amériques</option>
+                    <option value="east">🌏 Serveur Asie</option>
                   </select>
-                  <button id="btn-fetch-prices" class="btn btn-secondary" type="button">
+                  <button id="btn-fetch-prices" class="btn btn-primary" type="button">
                     🌐 Actualiser Prix API
                   </button>
                 </div>
               </div>
               <div class="market-search-bar">
                 <div class="market-search-field">
+                  <span class="search-field-icon" aria-hidden="true">🔍</span>
                   <input id="market-search-input" type="text" placeholder="Rechercher un objet (ex: Sanctificateur, Lames, T8_BAG)…" autocomplete="off" spellcheck="false" aria-label="Rechercher un objet à suivre" />
+                  <button id="market-search-clear" class="search-clear-btn" type="button" title="Effacer la recherche" hidden>✕</button>
                   <div id="market-search-results" class="search-dropdown" hidden></div>
                 </div>
                 <button id="btn-price-session" class="btn btn-secondary" type="button" title="Évaluer le butin et la récolte de la session aux prix réels du marché">
@@ -318,7 +402,10 @@
               </div>
               <div id="session-valuation-banner" class="valuation-banner" hidden></div>
               <div id="api-price-rows" class="table-wrap"></div>
-              <h3 class="sub-heading">Ordres du Marché &amp; Courriers Capturés en Jeu</h3>
+              <div class="card-subheader">
+                <h3 class="sub-heading">Ordres du Marché &amp; Courriers Capturés en Jeu</h3>
+                <span id="market-orders-badge" class="badge-subtle">0 capture</span>
+              </div>
               <div id="captured-market-rows" class="table-wrap"></div>
             </div>
           </div>

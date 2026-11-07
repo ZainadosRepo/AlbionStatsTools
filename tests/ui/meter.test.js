@@ -10,6 +10,8 @@ import {
   formatExactInt,
   formatMeterClipboard,
   formatNumber,
+  getCityBadgeInfo,
+  parseItemTierAndEnchantment,
   rankMeterPlayers,
   summarizeMarketPrices,
 } from "../../ui/meter.js";
@@ -168,4 +170,20 @@ test("collectSessionPriceableItems aggregates loot and gathering quantities", ()
   );
   assert.equal(value.total, 310000);
   assert.equal(value.pricedItems, 2);
+});
+
+test("parseItemTierAndEnchantment and getCityBadgeInfo provide accurate Albion UI metadata", () => {
+  assert.deepEqual(parseItemTierAndEnchantment("T7_2H_CLEAVER_HELL@1"), { tier: 7, enchantment: 1, label: "T7.1" });
+  assert.deepEqual(parseItemTierAndEnchantment("T8_BAG_INSIGHT"), { tier: 8, enchantment: 0, label: "T8" });
+  assert.deepEqual(parseItemTierAndEnchantment("NON_TIER_ITEM"), { tier: null, enchantment: 0, label: "" });
+
+  const martlock = getCityBadgeInfo("Martlock");
+  assert.equal(martlock.key, "martlock");
+  assert.equal(martlock.icon, "🛡️");
+  assert.equal(martlock.label, "Martlock");
+
+  const fallback = getCityBadgeInfo("Unknown Realm");
+  assert.equal(fallback.key, "default");
+  assert.equal(fallback.label, "Unknown Realm");
+  assert.equal(getCityBadgeInfo("-"), null);
 });
