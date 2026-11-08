@@ -238,7 +238,7 @@
           <span class="pill-sep" aria-hidden="true"></span>
           <span class="pill-seg pill-seg-silver">
             <svg class="ico pill-ico"><use href="#ico-coins"></use></svg>
-            <strong id="header-silver" class="player-silver">0 Ag</strong>
+            <strong id="header-silver" class="player-silver">0 Silver</strong>
           </span>
         </div>
 
@@ -342,7 +342,7 @@
           </button>
           <button
             id="btn-simulate"
-            class="btn btn-primary btn-sm"
+            class="btn btn-secondary btn-sm btn-nav-sim"
             type="button"
             title="Injecter un scénario réseau Photon complet (combat 5v5, brumes, récolte, butin, marché)"
           >
@@ -414,7 +414,7 @@
                   <select id="snapshot-select" class="select-input" aria-label="Choisir un combat enregistré">
                     <option value="live">Combat en direct</option>
                   </select>
-                  <button id="btn-delete-snapshot" class="btn btn-danger btn-icon-only" type="button" title="Supprimer ce snapshot" hidden>
+                  <button id="btn-delete-snapshot" class="btn btn-danger btn-sm btn-icon-only" type="button" title="Supprimer ce snapshot" hidden>
                     <svg class="ico"><use href="#ico-trash"></use></svg>
                   </button>
                 </div>
@@ -466,9 +466,9 @@
             </article>
 
             <article class="kpi-cell kpi-silver">
-              <span class="kpi-label">Argent Ramassé (Net)</span>
-              <strong id="kpi-silver" class="kpi-value">0</strong>
-              <span id="kpi-silver-hr" class="kpi-sub">0 / heure</span>
+              <span class="kpi-label">Silver (Net)</span>
+              <strong id="kpi-silver" class="kpi-value">0 Silver</strong>
+              <span id="kpi-silver-hr" class="kpi-sub">0 Silver / h</span>
               <span id="kpi-silver-tax" class="kpi-foot">Taxe guilde : 0 • Réparations : 0</span>
             </article>
 
@@ -476,7 +476,7 @@
               <span class="kpi-label">Points de ReSpec</span>
               <strong id="kpi-respec" class="kpi-value">0</strong>
               <span id="kpi-respec-hr" class="kpi-sub">0 / heure</span>
-              <span id="kpi-respec-cost" class="kpi-foot">Argent payé : 0</span>
+              <span id="kpi-respec-cost" class="kpi-foot">Silver payé : 0 Silver</span>
             </article>
 
             <article class="kpi-cell kpi-might">
@@ -497,7 +497,7 @@
           <div class="combat-grid">
             <div class="panel">
               <div class="panel-header">
-                <div>
+                <div class="panel-heading-group">
                   <h2>Sessions Enregistrées</h2>
                   <span class="sub-label">Sauvegarde auto à la fermeture &amp; dans session_history.json</span>
                 </div>
@@ -508,8 +508,11 @@
 
             <div class="panel">
               <div class="panel-header">
-                <h2>Guerre de Factions</h2>
-                <span class="sub-inline">Jetons, rang et points de drapeau</span>
+                <div class="panel-heading-group">
+                  <h2>Guerre de Factions</h2>
+                  <span class="sub-label">Jetons gagnés, points de rang et points de drapeau</span>
+                </div>
+                <span class="badge-subtle">Cités royales</span>
               </div>
               <div id="faction-rows" class="table-wrap"></div>
             </div>
@@ -559,7 +562,7 @@
           <div class="panel">
             <div class="panel-header">
               <h2>Journal de Récolte</h2>
-              <span id="gathering-summary-badge" class="badge-subtle">0 ressource • 0 Ag estimés</span>
+              <span id="gathering-summary-badge" class="badge-subtle">0 ressource • 0 Silver estimés</span>
             </div>
             <div id="gathering-rows" class="table-wrap"></div>
           </div>
@@ -595,7 +598,7 @@
             <!-- Crafting Calculator -->
             <div class="panel craft-card">
               <div class="panel-header">
-                <div>
+                <div class="panel-heading-group">
                   <h2>Calculateur d'Artisanat (RRR) &amp; Coûts</h2>
                   <span id="craft-prefill-note" class="sub-label">Simulation exacte des retours ressources, taxes station et marché</span>
                 </div>
@@ -633,7 +636,7 @@
                     <span class="field-title">Prix vente / u</span>
                     <div class="input-wrap has-suffix">
                       <input id="craft-sell" type="number" min="0" step="100" value="445000" required />
-                      <span class="input-suffix currency-silver">Ag</span>
+                      <span class="input-suffix currency-silver">Silver</span>
                     </div>
                   </label>
                   <label class="field">
@@ -646,7 +649,7 @@
                     <span class="field-title">Gain journal / u</span>
                     <div class="input-wrap has-suffix">
                       <input id="craft-journal" type="number" min="0" step="100" value="14500" required />
-                      <span class="input-suffix currency-silver">Ag</span>
+                      <span class="input-suffix currency-silver">Silver</span>
                     </div>
                   </label>
                 </div>
@@ -654,12 +657,12 @@
                 <div class="form-row form-row-2">
                   <div class="field">
                     <div class="field-header-row">
-                      <span class="field-title">Bonus prod.</span>
+                      <span class="field-title">Bonus RRR</span>
                       <div class="preset-pill-group">
-                        <button type="button" class="preset-pill" data-preset-bonus="0" title="Île personnelle sans bonus (0% RRR)">0%</button>
-                        <button type="button" class="preset-pill active" data-preset-bonus="18.0" title="Cité royale standard (18% = 15,25% RRR)">18% Cité</button>
+                        <button type="button" class="preset-pill" data-preset-bonus="0" title="Île personnelle sans bonus (0% = 0% RRR)">0%</button>
+                        <button type="button" class="preset-pill active" data-preset-bonus="18.0" title="Cité royale standard (18% = 15,25% RRR)">18%</button>
                         <button type="button" class="preset-pill" data-preset-bonus="47.9" title="Focus sur île ou hors cité spécialisée (47,9% = 32,39% RRR)">47,9%</button>
-                        <button type="button" class="preset-pill" data-preset-bonus="77.0" title="Cité spécialisée + Focus (77% = 43,50% RRR)">77% Focus</button>
+                        <button type="button" class="preset-pill" data-preset-bonus="77.0" title="Cité spécialisée + Focus (77% = 43,50% RRR)">77%</button>
                       </div>
                     </div>
                     <div class="input-wrap has-suffix">
@@ -671,7 +674,7 @@
                     <span class="field-title">Taxe station / 100 nutr.</span>
                     <div class="input-wrap has-suffix">
                       <input id="craft-fee" type="number" min="0" step="10" value="450" required />
-                      <span class="input-suffix currency-silver">Ag</span>
+                      <span class="input-suffix currency-silver">Silver</span>
                     </div>
                   </label>
                 </div>
@@ -681,14 +684,14 @@
                     <span class="field-title">Ressources soumises au RRR / u</span>
                     <div class="input-wrap has-suffix">
                       <input id="craft-mat-ret" type="number" min="0" step="100" value="288400" required />
-                      <span class="input-suffix currency-silver">Ag</span>
+                      <span class="input-suffix currency-silver">Silver</span>
                     </div>
                   </label>
                   <label class="field">
                     <span class="field-title">Artefacts &amp; cœurs (0% RRR) / u</span>
                     <div class="input-wrap has-suffix">
                       <input id="craft-mat-art" type="number" min="0" step="100" value="85000" required />
-                      <span class="input-suffix currency-silver">Ag</span>
+                      <span class="input-suffix currency-silver">Silver</span>
                     </div>
                   </label>
                 </div>
@@ -714,7 +717,7 @@
             <!-- Market Price Fetcher & Live Captures -->
             <div class="panel market-card">
               <div class="panel-header">
-                <div>
+                <div class="panel-heading-group">
                   <h2>Cotations Albion Data &amp; Arbitrage</h2>
                   <span class="sub-label">Comparaison inter-cités et pré-remplissage craft</span>
                 </div>
@@ -749,7 +752,7 @@
                 </div>
                 <button
                   id="btn-price-session"
-                  class="btn btn-secondary btn-sm"
+                  class="btn btn-secondary"
                   type="button"
                   title="Évaluer le butin et la récolte de la session aux prix réels du marché"
                 >
