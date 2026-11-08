@@ -7,7 +7,7 @@ test("normalizeSettings returns defaults on null or invalid root", () => {
   assert.deepEqual(normalizeSettings([1, 2, 3]), DEFAULT_SETTINGS);
 });
 
-test("normalizeSettings clamps autoRefreshMs and filters invalid regions/modes/cities", () => {
+test("normalizeSettings clamps autoRefreshMs, migrates compactMode, and strips legacy overlay keys", () => {
   const normalized = normalizeSettings({
     region: "west",
     meterMode: "hps",
@@ -23,14 +23,15 @@ test("normalizeSettings clamps autoRefreshMs and filters invalid regions/modes/c
   assert.equal(normalized.region, "west");
   assert.equal(normalized.meterMode, "hps");
   assert.equal(normalized.copyStyle, "full");
-  assert.equal(normalized.alwaysOnTop, true);
-  assert.equal(normalized.compactOverlay, true);
-  assert.equal(normalized.overlayOpacity, 35);
+  assert.equal(normalized.compactMode, true);
+  assert.equal("alwaysOnTop" in normalized, false);
+  assert.equal("overlayOpacity" in normalized, false);
+  assert.equal("compactOverlay" in normalized, false);
   assert.equal(normalized.autoRefreshMs, 500);
   assert.deepEqual(normalized.selectedCities, ["Caerleon", "Brecilien"]);
   assert.deepEqual(normalized.trackedItems, ["T8_BAG", "T6_ORE_LEVEL1@1"]);
 
-  const fallbackOpacity = normalizeSettings({ overlayOpacity: null, trackedItems: [] });
-  assert.equal(fallbackOpacity.overlayOpacity, 96);
-  assert.deepEqual(fallbackOpacity.trackedItems, DEFAULT_SETTINGS.trackedItems);
+  const explicitCompact = normalizeSettings({ compactMode: false, compactOverlay: true, trackedItems: [] });
+  assert.equal(explicitCompact.compactMode, false);
+  assert.deepEqual(explicitCompact.trackedItems, DEFAULT_SETTINGS.trackedItems);
 });

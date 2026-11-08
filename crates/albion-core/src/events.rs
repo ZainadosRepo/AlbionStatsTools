@@ -37,7 +37,6 @@ pub const EV_UPDATE_CURRENCY: i16 = 290;
 pub const EV_RECEIVED_GVG_SEASON_POINTS: i16 = 381;
 pub const EV_LOOT_CHEST_OPENED: i16 = 390;
 pub const EV_UPDATE_FACTION_STANDING: i16 = 407;
-pub const EV_NEW_MISTS_CAGED_WISP: i16 = 500;
 pub const EV_MISTS_WISP_CAGE_OPENED: i16 = 501;
 pub const EV_MIGHT_AND_FAVOR_RECEIVED: i16 = 514;
 
@@ -318,9 +317,8 @@ pub enum AlbionTelemetryEvent {
     LootChestOpened {
         object_id: i64,
     },
-    MistsCagedWisp {
+    MistsWispCageOpened {
         object_id: i64,
-        opened: bool,
     },
     MightAndFavorReceived {
         might: FixPoint,
@@ -598,13 +596,8 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
         EV_LOOT_CHEST_OPENED => Some(AlbionTelemetryEvent::LootChestOpened {
             object_id: p.get_i64(0)?,
         }),
-        EV_NEW_MISTS_CAGED_WISP => Some(AlbionTelemetryEvent::MistsCagedWisp {
+        EV_MISTS_WISP_CAGE_OPENED => Some(AlbionTelemetryEvent::MistsWispCageOpened {
             object_id: p.get_i64(0)?,
-            opened: false,
-        }),
-        EV_MISTS_WISP_CAGE_OPENED => Some(AlbionTelemetryEvent::MistsCagedWisp {
-            object_id: p.get_i64(0)?,
-            opened: true,
         }),
         EV_MIGHT_AND_FAVOR_RECEIVED => Some(AlbionTelemetryEvent::MightAndFavorReceived {
             might: p.get_fixpoint(1).unwrap_or_default(),
@@ -1147,16 +1140,9 @@ pub fn encode_telemetry_event_to_photon(event: &AlbionTelemetryEvent) -> PhotonM
                 parameters: p,
             })
         }
-        AlbionTelemetryEvent::MistsCagedWisp { object_id, opened } => {
+        AlbionTelemetryEvent::MistsWispCageOpened { object_id } => {
             p.insert(0, Protocol16Value::Long(*object_id));
-            p.insert(
-                252,
-                Protocol16Value::Short(if *opened {
-                    EV_MISTS_WISP_CAGE_OPENED
-                } else {
-                    EV_NEW_MISTS_CAGED_WISP
-                }),
-            );
+            p.insert(252, Protocol16Value::Short(EV_MISTS_WISP_CAGE_OPENED));
             PhotonMessage::EventData(EventDataPayload {
                 code: 1,
                 parameters: p,

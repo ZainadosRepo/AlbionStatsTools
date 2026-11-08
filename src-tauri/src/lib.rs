@@ -6,11 +6,10 @@ use albion_core::catalog::{Catalog, CraftingRecipe, ItemEntry};
 use albion_core::crafting::{simulate_crafting, CraftingSimulationInput, CraftingSimulationResult};
 use albion_core::engine::{AnalyzerEngine, AppSnapshot, ArchivedSession, MeterSnapshot};
 use capture::{now_unix_ms, start_background_capture, CaptureStatus};
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use serde::Serialize;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, WindowEvent};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 const CATALOG_JSON: &str = include_str!("../../data/catalog.json");
 const RECIPES_JSON: &str = include_str!("../../data/recipes.json");
@@ -19,9 +18,7 @@ const LIVE_HISTORY_FLUSH_INTERVAL_MS: u64 = 10_000;
 struct AppState {
     engine: Arc<Mutex<AnalyzerEngine>>,
     capture_status: Arc<Mutex<CaptureStatus>>,
-    click_through: AtomicBool,
     last_history_flush_ms: AtomicU64,
-    shortcut_error: OnceLock<String>,
 }
 
 #[derive(Serialize)]
@@ -29,8 +26,6 @@ struct AppState {
 struct FullStatusResponse {
     snapshot: AppSnapshot,
     capture: CaptureStatus,
-    click_through: bool,
-    shortcut_error: Option<String>,
 }
 
 #[tauri::command]
@@ -63,12 +58,7 @@ fn get_state(app: AppHandle, state: tauri::State<AppState>) -> Result<FullStatus
         .lock()
         .map_err(|_| "verrou capture indisponible".to_string())?
         .clone();
-    Ok(FullStatusResponse {
-        snapshot,
-        capture,
-        click_through: state.click_through.load(Ordering::Relaxed),
-        shortcut_error: state.shortcut_error.get().cloned(),
-    })
+    Ok(FullStatusResponse { snapshot, capture })
 }
 
 #[tauri::command]
@@ -287,29 +277,6 @@ fn import_ao_bin_dumps(
     Ok(added)
 }
 
-fn apply_click_through(app: &AppHandle, state: &AppState, enabled: bool) -> Result<bool, String> {
-    let Some(window) = app.get_webview_window("main") else {
-        return Err("Fenêtre principale introuvable".into());
-    };
-    window
-        .set_ignore_cursor_events(enabled)
-        .map_err(|e| e.to_string())?;
-    if enabled {
-        let _ = window.set_always_on_top(true);
-    }
-    state.click_through.store(enabled, Ordering::Relaxed);
-    Ok(enabled)
-}
-
-#[tauri::command]
-fn set_click_through(
-    app: AppHandle,
-    state: tauri::State<AppState>,
-    enabled: bool,
-) -> Result<bool, String> {
-    apply_click_through(&app, &state, enabled)
-}
-
 #[tauri::command]
 fn relaunch_as_admin(app: AppHandle) -> Result<(), String> {
     capture::relaunch_as_admin()?;
@@ -352,34 +319,6 @@ fn save_settings(app: AppHandle, settings: serde_json::Value) -> Result<(), Stri
     settings::save(&settings_path(&app)?, &settings)
 }
 
-/// Ctrl + Alt + M: hide the window or bring it back in front of Albion Online.
-fn toggle_main_window(app: &AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    let shown = window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false);
-    let result = if shown {
-        window.hide()
-    } else {
-        window
-            .unminimize()
-            .and_then(|_| window.show())
-            .and_then(|_| window.set_focus())
-    };
-    if let Err(e) = result {
-        eprintln!("Ctrl+Alt+M: {e}");
-    }
-}
-
-/// Ctrl + Alt + L: toggle click-through mode so mouse clicks pass directly to Albion Online.
-fn toggle_click_through_shortcut(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let next = !state.click_through.load(Ordering::Relaxed);
-    if let Err(e) = apply_click_through(app, &state, next) {
-        eprintln!("Ctrl+Alt+L: {e}");
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let now = now_unix_ms();
@@ -390,32 +329,14 @@ pub fn run() {
     let capture_status = Arc::new(Mutex::new(CaptureStatus::default()));
     start_background_capture(Arc::clone(&engine), Arc::clone(&capture_status));
 
-    let toggle_vis = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM);
-    let toggle_lock = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, shortcut, event| {
-                    if event.state() != ShortcutState::Pressed {
-                        return;
-                    }
-                    if shortcut == &toggle_vis {
-                        toggle_main_window(app);
-                    } else if shortcut == &toggle_lock {
-                        toggle_click_through_shortcut(app);
-                    }
-                })
-                .build(),
-        )
         .manage(AppState {
             engine,
             capture_status,
-            click_through: AtomicBool::new(false),
             last_history_flush_ms: AtomicU64::new(now),
-            shortcut_error: OnceLock::new(),
         })
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
@@ -453,11 +374,6 @@ pub fn run() {
                     }
                 }
             }
-            for sc in [toggle_vis, toggle_lock] {
-                if let Err(e) = app.global_shortcut().register(sc) {
-                    let _ = app.state::<AppState>().shortcut_error.set(e.to_string());
-                }
-            }
             update::check_in_background(app.handle().clone());
             Ok(())
         })
@@ -476,7 +392,6 @@ pub fn run() {
             list_catalog_items,
             search_catalog_items,
             import_ao_bin_dumps,
-            set_click_through,
             relaunch_as_admin,
             load_settings,
             save_settings

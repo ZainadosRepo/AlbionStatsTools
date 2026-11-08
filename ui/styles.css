@@ -1,10 +1,8 @@
 :root {
-  --shell-opacity: 0.96;
-
   /* Curated Warm-Obsidian & Brushed-Steel Surface Scale (HSL-tuned, zero purple) */
-  --bg-shell: rgba(13, 15, 19, var(--shell-opacity, 0.96));
-  --bg-bar: rgba(17, 20, 25, var(--shell-opacity, 0.96));
-  --bg-panel: rgba(20, 24, 30, max(var(--shell-opacity, 0.96), 0.9));
+  --bg-shell: #0d0f13;
+  --bg-bar: #111419;
+  --bg-panel: #14181e;
   --bg-elevated: rgba(26, 31, 39, 0.96);
   --bg-row: rgba(24, 28, 36, 0.78);
   --bg-row-hover: rgba(32, 38, 48, 0.92);
@@ -66,7 +64,7 @@ html,
 body {
   width: 100%;
   height: 100%;
-  background: transparent;
+  background: var(--bg-shell);
   color: var(--text-main);
   font-family: var(--font-sans);
   font-size: 12.5px;
@@ -151,7 +149,7 @@ body {
   min-height: 0;
   background: var(--bg-shell);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-shell);
+  border-radius: 0;
   overflow: hidden;
   box-shadow: var(--shadow-shell);
 }
@@ -414,106 +412,12 @@ body {
   color: #fff;
 }
 
-.opacity-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 9px;
-  height: 26px;
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-}
-
-.opacity-icon {
-  width: 13px;
-  height: 13px;
-  color: var(--text-dim);
-}
-
-.opacity-slider {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 54px;
-  height: 14px;
-  background: transparent;
-  cursor: pointer;
-  outline: none;
-}
-
-.opacity-slider::-webkit-slider-runnable-track {
-  height: 3px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.16);
-}
-
-.opacity-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 1.5px solid #14181e;
-  margin-top: -4px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
-  transition: transform 0.12s ease, background-color 0.12s ease;
-}
-
-.opacity-slider:hover::-webkit-slider-thumb {
-  background: var(--accent-bright);
-  transform: scale(1.08);
-}
-
-.opacity-slider::-moz-range-track {
-  height: 3px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.16);
-}
-
-.opacity-slider::-moz-range-thumb {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 1.5px solid #14181e;
-}
-
 .window-control-sep {
   width: 1px;
   height: 15px;
   background: var(--border-subtle);
   margin: 0 2px;
   flex-shrink: 0;
-}
-
-/* Click-Through Banner (Amber tactical notice — zero purple) */
-.click-through-banner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 5px 12px;
-  background: rgba(223, 176, 92, 0.12);
-  border-bottom: 1px solid var(--accent-border);
-  color: var(--accent-bright);
-  font-size: 11.5px;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.click-through-banner kbd {
-  padding: 1px 5px;
-  border-radius: 3px;
-  border: 1px solid var(--accent-border);
-  background: rgba(0, 0, 0, 0.35);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-}
-
-.app-shell.click-through .titlebar-actions .tb-btn:not(#btn-click-through) {
-  opacity: 0.42;
 }
 
 /* =========================================================================
@@ -2580,46 +2484,45 @@ input[type="number"]:focus {
 }
 
 /* =========================================================================
-   COMPACT OVERLAY MODE & FLUID SMALL-WINDOW RESPONSIVENESS (360px -> 4K)
+   COMPACT LAYOUT MODE & FLUID SMALL-WINDOW RESPONSIVENESS (360px -> 4K)
    Never hides page navigation; progressively compacts labels so nothing clips!
    ========================================================================= */
 
-.app-shell.compact-overlay .player-pill,
-.app-shell.compact-overlay .opacity-control,
-.app-shell.compact-overlay .spell-card,
-.app-shell.compact-overlay .nav-tab .tab-label,
-.app-shell.compact-overlay .nav-action-label,
-.app-shell.compact-overlay .metric-prefix,
-.app-shell.compact-overlay .btn-label,
-.app-shell.compact-overlay .tb-btn-label,
-.app-shell.compact-overlay .status-badge .badge-text {
+.app-shell.compact-layout .player-pill,
+.app-shell.compact-layout .spell-card,
+.app-shell.compact-layout .nav-tab .tab-label,
+.app-shell.compact-layout .nav-action-label,
+.app-shell.compact-layout .metric-prefix,
+.app-shell.compact-layout .btn-label,
+.app-shell.compact-layout .tb-btn-label,
+.app-shell.compact-layout .status-badge .badge-text {
   display: none;
 }
 
-.app-shell.compact-overlay .status-badge {
+.app-shell.compact-layout .status-badge {
   padding: 0 7px;
 }
 
-.app-shell.compact-overlay .nav-bar-container {
+.app-shell.compact-layout .nav-bar-container {
   min-height: 34px;
   padding: 0 8px;
 }
 
-.app-shell.compact-overlay .nav-tabs {
+.app-shell.compact-layout .nav-tabs {
   margin-left: -6px;
 }
 
-.app-shell.compact-overlay .nav-tab {
+.app-shell.compact-layout .nav-tab {
   height: 34px;
   padding: 0 9px;
 }
 
-.app-shell.compact-overlay .workspace {
+.app-shell.compact-layout .workspace {
   padding: 8px;
 }
 
-.app-shell.compact-overlay .combat-grid,
-.app-shell.compact-overlay .economy-grid {
+.app-shell.compact-layout .combat-grid,
+.app-shell.compact-layout .economy-grid {
   grid-template-columns: 1fr;
 }
 
@@ -2643,8 +2546,7 @@ input[type="number"]:focus {
 }
 
 @media (max-width: 740px) {
-  .player-pill,
-  .opacity-control {
+  .player-pill {
     display: none;
   }
 

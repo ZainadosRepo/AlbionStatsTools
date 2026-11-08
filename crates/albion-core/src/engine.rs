@@ -132,7 +132,6 @@ pub struct DungeonRun {
     pub might: f64,
     pub favor: f64,
     pub chests_opened: u32,
-    pub caged_wisps_seen: u32,
     pub caged_wisps_opened: u32,
 }
 
@@ -617,8 +616,12 @@ impl AnalyzerEngine {
                 object_id,
                 equipment,
             } => {
-                let ent = self.ensure_entity(object_id);
-                ent.equipment = equipment;
+                if object_id == self.local_player.object_id {
+                    let ent = self.ensure_entity(object_id);
+                    ent.equipment = equipment;
+                } else if let Some(ent) = self.entities.get_mut(&object_id) {
+                    ent.equipment = equipment;
+                }
             }
             AlbionTelemetryEvent::PartyJoined {
                 party_object_id: _,
@@ -674,18 +677,27 @@ impl AnalyzerEngine {
                 causer_id,
                 spell_indices,
             } => {
-                // Weapon inference (`DetectUsedWeapon`) when main_hand is not yet known
-                let mut inferred = None;
-                for &sp in &spell_indices {
-                    if let Some(weapon) = self.catalog.infer_weapon_from_spell(sp) {
-                        inferred = Some(weapon.index);
-                        break;
+                // Weapon inference (`DetectUsedWeapon`) restricted strictly to party/self
+                let is_party_or_self = causer_id == self.local_player.object_id
+                    && self.local_player.object_id != 0
+                    || self
+                        .entities
+                        .get(&causer_id)
+                        .map(|e| e.is_party || e.is_self)
+                        .unwrap_or(false);
+                if is_party_or_self {
+                    let mut inferred = None;
+                    for &sp in &spell_indices {
+                        if let Some(weapon) = self.catalog.infer_weapon_from_spell(sp) {
+                            inferred = Some(weapon.index);
+                            break;
+                        }
                     }
-                }
-                if let Some(weapon_idx) = inferred {
-                    let ent = self.ensure_entity(causer_id);
-                    if ent.equipment.main_hand == 0 {
-                        ent.equipment.main_hand = weapon_idx;
+                    if let Some(weapon_idx) = inferred {
+                        let ent = self.ensure_entity(causer_id);
+                        if ent.equipment.main_hand == 0 {
+                            ent.equipment.main_hand = weapon_idx;
+                        }
                     }
                 }
             }
@@ -712,41 +724,49 @@ impl AnalyzerEngine {
                 }
             }
             AlbionTelemetryEvent::UpdateFame {
+                object_id,
                 fame_with_zone_multiplier,
                 zone_fame,
                 satchel_fame,
                 ..
             } => {
-                let gained = fame_with_zone_multiplier.as_f64().max(0.0);
-                self.session.fame += gained;
-                self.session.zone_fame += zone_fame.as_f64().max(0.0);
-                self.session.satchel_fame += satchel_fame.as_f64().max(0.0);
-                if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
-                    run.fame += gained;
+                if self.is_local_object(object_id) {
+                    let gained = fame_with_zone_multiplier.as_f64().max(0.0);
+                    self.session.fame += gained;
+                    self.session.zone_fame += zone_fame.as_f64().max(0.0);
+                    self.session.satchel_fame += satchel_fame.as_f64().max(0.0);
+                    if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
+                        run.fame += gained;
+                    }
                 }
             }
             AlbionTelemetryEvent::TakeSilver {
+                object_id,
                 yield_pre_tax,
                 guild_tax,
                 cluster_tax,
                 ..
             } => {
-                let pre = yield_pre_tax.as_f64().max(0.0);
-                let g_tax = guild_tax.as_f64().max(0.0);
-                let c_tax = cluster_tax.as_f64().max(0.0);
-                let net = (pre - g_tax - c_tax).max(0.0);
-                self.session.silver += net;
-                self.session.guild_tax_paid += g_tax;
-                self.session.cluster_tax_paid += c_tax;
-                if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
-                    run.silver += net;
+                if self.is_local_object(object_id) {
+                    let pre = yield_pre_tax.as_f64().max(0.0);
+                    let g_tax = guild_tax.as_f64().max(0.0);
+                    let c_tax = cluster_tax.as_f64().max(0.0);
+                    let net = (pre - g_tax - c_tax).max(0.0);
+                    self.session.silver += net;
+                    self.session.guild_tax_paid += g_tax;
+                    self.session.cluster_tax_paid += c_tax;
+                    if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
+                        run.silver += net;
+                    }
                 }
             }
             AlbionTelemetryEvent::UpdateMoney {
+                object_id,
                 current_player_silver,
-                ..
             } => {
-                self.local_player.silver = current_player_silver.as_f64();
+                if self.is_local_object(object_id) {
+                    self.local_player.silver = current_player_silver.as_f64();
+                }
             }
             AlbionTelemetryEvent::UpdateReSpecPoints {
                 gained_respec_points,
@@ -836,29 +856,28 @@ impl AnalyzerEngine {
                     run.chests_opened += 1;
                 }
             }
-            AlbionTelemetryEvent::MistsCagedWisp { opened, .. } => {
+            AlbionTelemetryEvent::MistsWispCageOpened { .. } => {
                 if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
-                    if opened {
-                        run.caged_wisps_opened += 1;
-                    } else {
-                        run.caged_wisps_seen += 1;
-                    }
+                    run.caged_wisps_opened += 1;
                 }
             }
             AlbionTelemetryEvent::HarvestFinished {
+                user_object_id,
                 item_id,
                 standard_amount,
                 collector_bonus_amount,
                 premium_bonus_amount,
                 ..
             } => {
-                self.handle_harvest(
-                    item_id,
-                    standard_amount,
-                    collector_bonus_amount,
-                    premium_bonus_amount,
-                    now_ms,
-                );
+                if self.is_local_object(user_object_id) {
+                    self.handle_harvest(
+                        item_id,
+                        standard_amount,
+                        collector_bonus_amount,
+                        premium_bonus_amount,
+                        now_ms,
+                    );
+                }
             }
             AlbionTelemetryEvent::NewDiscoveredItem {
                 object_id,
@@ -884,15 +903,17 @@ impl AnalyzerEngine {
                 item_index,
                 quantity,
             } => {
-                self.handle_loot_grabbed(
-                    object_id,
-                    looted_from_name,
-                    looted_by_name,
-                    is_silver,
-                    item_index,
-                    quantity,
-                    now_ms,
-                );
+                if self.is_party_or_self_looter(&looted_by_name) {
+                    self.handle_loot_grabbed(
+                        object_id,
+                        looted_from_name,
+                        looted_by_name,
+                        is_silver,
+                        item_index,
+                        quantity,
+                        now_ms,
+                    );
+                }
             }
             AlbionTelemetryEvent::AuctionEntriesResponse {
                 is_requests,
@@ -925,8 +946,56 @@ impl AnalyzerEngine {
                     self.trades.truncate(MAX_MARKET_ENTRIES);
                 }
             }
-            AlbionTelemetryEvent::Leave { .. } | AlbionTelemetryEvent::NewLoot { .. } => {}
+            AlbionTelemetryEvent::Leave { object_id } => {
+                self.last_player_health.remove(&object_id);
+                self.discovered_items.remove(&object_id);
+                let non_party_guid = self
+                    .entities
+                    .get(&object_id)
+                    .filter(|e| !e.is_party && !e.is_self)
+                    .map(|e| e.guid);
+                if let Some(guid) = non_party_guid {
+                    self.entities.remove(&object_id);
+                    if self.guid_to_object_id.get(&guid) == Some(&object_id) {
+                        self.guid_to_object_id.remove(&guid);
+                    }
+                }
+            }
+            AlbionTelemetryEvent::NewLoot { .. } => {}
         }
+    }
+
+    #[inline]
+    fn is_local_object(&self, object_id: i64) -> bool {
+        self.local_player.object_id == 0
+            || object_id == 0
+            || object_id == self.local_player.object_id
+    }
+
+    fn is_party_or_self_looter(&self, name: &str) -> bool {
+        if self.local_player.object_id == 0 && self.party_guids.is_empty() {
+            return true;
+        }
+        if name.is_empty() {
+            return false;
+        }
+        if !self.local_player.username.is_empty()
+            && name.eq_ignore_ascii_case(&self.local_player.username)
+        {
+            return true;
+        }
+        if self
+            .party_guids
+            .values()
+            .any(|member| !member.is_empty() && member.eq_ignore_ascii_case(name))
+        {
+            return true;
+        }
+        self.entities.values().any(|ent| {
+            (ent.is_party || ent.is_self)
+                && !ent.name.is_empty()
+                && ent.name.eq_ignore_ascii_case(name)
+        })
     }
 
     fn ensure_entity(&mut self, object_id: i64) -> &mut InternalEntity {
@@ -1052,6 +1121,13 @@ impl AnalyzerEngine {
             self.local_player.in_combat = false;
         }
 
+        // Purge transient non-party entities and ground items from the previous zone
+        self.discovered_items.clear();
+        self.last_player_health.clear();
+        self.entities.retain(|_, e| e.is_party || e.is_self);
+        self.guid_to_object_id
+            .retain(|_, obj_id| self.entities.contains_key(obj_id));
+
         // Finalize any currently active dungeon run
         if let Some(prev) = self.dungeons.first_mut().filter(|d| d.is_active) {
             prev.is_active = false;
@@ -1122,7 +1198,6 @@ impl AnalyzerEngine {
                     might: 0.0,
                     favor: 0.0,
                     chests_opened: 0,
-                    caged_wisps_seen: 0,
                     caged_wisps_opened: 0,
                 },
             );
@@ -1806,6 +1881,9 @@ impl AnalyzerEngine {
 
         let mut inspected_players = Vec::new();
         for ent in self.entities.values() {
+            if !ent.is_party && !ent.is_self {
+                continue;
+            }
             let slot_defs = [
                 ("mainHand", ent.equipment.main_hand),
                 ("offHand", ent.equipment.off_hand),
@@ -2255,10 +2333,7 @@ impl AnalyzerEngine {
             ),
             (
                 base_ms + 20_100,
-                AlbionTelemetryEvent::MistsCagedWisp {
-                    object_id: 7002,
-                    opened: true,
-                },
+                AlbionTelemetryEvent::MistsWispCageOpened { object_id: 7002 },
             ),
             (
                 base_ms + 20_300,
@@ -2470,5 +2545,192 @@ mod tests {
         let snap = engine.snapshot(25_500);
         assert_eq!(snap.snapshots.len(), 1);
         assert!(snap.snapshots[0].label.starts_with("Auto • "));
+    }
+
+    #[test]
+    fn enforces_strict_party_isolation_and_ignores_enemy_or_radar_events() {
+        use crate::photon::PhotonMessage;
+        use crate::protocol16::{EventDataPayload, ParameterTable, Protocol16Value};
+
+        let catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let mut engine = AnalyzerEngine::new(catalog, 1_000);
+
+        let g_self = Guid16([0xAA; 16]);
+        let g_enemy = Guid16([0xBB; 16]);
+        let g_ally = Guid16([0xCC; 16]);
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::JoinResponse {
+                user_object_id: 101,
+                user_guid: g_self,
+                username: "Aurelia".into(),
+                map_index: "3005".into(),
+                main_map_index: "3005".into(),
+                guild_name: "Aegis".into(),
+                alliance_name: String::new(),
+                current_focus_points: 10_000.0,
+                max_focus_points: 30_000.0,
+                silver: FixPoint::from_f64(1_000_000.0),
+                gold: FixPoint::from_f64(0.0),
+                learning_points: FixPoint::from_f64(0.0),
+                reputation: 0.0,
+                is_respec_active: false,
+            },
+            1_100,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ChangeClusterResponse {
+                index: "MISTS_SOLO_T8".into(),
+                world_map_data_type: "mists".into(),
+                island_name: String::new(),
+                mists_dungeon_tier: 8,
+            },
+            1_200,
+        );
+
+        // Nearby hostile/third-party player packets arriving over UDP
+        let third_party_events = [
+            AlbionTelemetryEvent::NewCharacter {
+                object_id: 999,
+                name: "GankerX".into(),
+                guid: g_enemy,
+                guild_name: "Hostile".into(),
+                equipment: CharacterEquipment {
+                    main_hand: 1004,
+                    chest: 1302,
+                    potion: 1801,
+                    buff_food: 1901,
+                    ..CharacterEquipment::default()
+                },
+            },
+            AlbionTelemetryEvent::ActiveSpellEffectsUpdate {
+                causer_id: 888, // Off-screen unknown caster
+                spell_indices: vec![2604],
+            },
+            AlbionTelemetryEvent::HealthUpdate(HealthTick {
+                affected_object_id: 5000,
+                timestamp: 1,
+                health_change: -1_500.0,
+                new_health_value: 3_500.0,
+                effect_type: EffectType::Physical,
+                effect_origin: EffectOrigin::Direct,
+                causer_id: 999,
+                causing_spell_index: 2404,
+            }),
+            AlbionTelemetryEvent::HarvestFinished {
+                user_object_id: 999,
+                harvest_object_id: 9001,
+                item_id: 4011,
+                standard_amount: 4,
+                collector_bonus_amount: 1,
+                premium_bonus_amount: 1,
+            },
+            AlbionTelemetryEvent::TakeSilver {
+                object_id: 999,
+                target_entity_id: 5000,
+                yield_pre_tax: FixPoint::from_f64(25_000.0),
+                guild_tax: FixPoint::from_f64(0.0),
+                cluster_tax: FixPoint::from_f64(0.0),
+                is_premium_bonus: false,
+            },
+            AlbionTelemetryEvent::UpdateFame {
+                object_id: 999,
+                total_player_fame: FixPoint::from_f64(100_000.0),
+                fame_with_zone_multiplier: FixPoint::from_f64(15_000.0),
+                zone_fame: FixPoint::from_f64(10_000.0),
+                is_premium_bonus: false,
+                satchel_fame: FixPoint::from_f64(0.0),
+                bonus_factor: 1.0,
+            },
+            AlbionTelemetryEvent::OtherGrabbedLoot {
+                object_id: 8001,
+                looted_from_name: "Coffre".into(),
+                looted_by_name: "GankerX".into(),
+                is_silver: false,
+                item_index: 1004,
+                quantity: 1,
+            },
+        ];
+        for (idx, ev) in third_party_events.into_iter().enumerate() {
+            engine.ingest_telemetry_event(ev, 2_000 + (idx as u64) * 100);
+        }
+
+        // Raw EV_NEW_MISTS_CAGED_WISP (500) and Move (code 3) packets must be ignored at decode
+        let mut wisp_spawn_params = ParameterTable::new();
+        wisp_spawn_params.insert(0, Protocol16Value::Long(7777));
+        wisp_spawn_params.insert(252, Protocol16Value::Short(500));
+        let wisp_spawn_msg = PhotonMessage::EventData(EventDataPayload {
+            code: 1,
+            parameters: wisp_spawn_params,
+        });
+        let move_msg = PhotonMessage::EventData(EventDataPayload {
+            code: 3,
+            parameters: ParameterTable::new(),
+        });
+        let raw_pkt = build_photon_udp_packet(&[wisp_spawn_msg, move_msg], true, false, 77);
+        assert_eq!(engine.ingest_udp_payload(&raw_pkt, 3_000), 0);
+
+        let snap = engine.snapshot(3_500);
+        assert_eq!(snap.inspected_players.len(), 1);
+        assert_eq!(snap.inspected_players[0].name, "Aurelia");
+        assert!(snap.meter_players.is_empty());
+        assert!(snap.gathering_log.is_empty());
+        assert_eq!(snap.gathering_totals.total_nodes, 0);
+        assert_eq!(snap.session.silver, 0.0);
+        assert_eq!(snap.session.fame, 0.0);
+        assert!(snap.loot_log.is_empty());
+        assert_eq!(snap.dungeons[0].caged_wisps_opened, 0);
+
+        // Nearby player joins party -> becomes visible in Party Inspect, then leaves -> hidden again
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::NewCharacter {
+                object_id: 202,
+                name: "FriendlyAlly".into(),
+                guid: g_ally,
+                guild_name: "Aegis".into(),
+                equipment: CharacterEquipment {
+                    main_hand: 1061,
+                    ..CharacterEquipment::default()
+                },
+            },
+            4_000,
+        );
+        assert_eq!(engine.snapshot(4_100).inspected_players.len(), 1);
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::PartyPlayerJoined {
+                party_object_id: 900,
+                user_guid: g_ally,
+                username: "FriendlyAlly".into(),
+            },
+            4_200,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::OtherGrabbedLoot {
+                object_id: 8002,
+                looted_from_name: "Coffre".into(),
+                looted_by_name: "FriendlyAlly".into(),
+                is_silver: false,
+                item_index: 1004,
+                quantity: 1,
+            },
+            4_300,
+        );
+        let snap_grouped = engine.snapshot(4_400);
+        assert_eq!(snap_grouped.inspected_players.len(), 2);
+        assert!(snap_grouped
+            .inspected_players
+            .iter()
+            .any(|p| p.name == "FriendlyAlly"));
+        assert_eq!(snap_grouped.loot_log.len(), 1);
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::PartyPlayerLeft {
+                party_object_id: 900,
+                user_guid: g_ally,
+            },
+            4_500,
+        );
+        assert_eq!(engine.snapshot(4_600).inspected_players.len(), 1);
     }
 }

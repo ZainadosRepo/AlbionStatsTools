@@ -26,9 +26,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   region: "europe",
   meterMode: "damage",
   copyStyle: "compact",
-  alwaysOnTop: false,
-  compactOverlay: false,
-  overlayOpacity: 96,
+  compactMode: false,
   autoRefreshMs: 1000,
   selectedCities: [...DEFAULT_CITIES],
   trackedItems: [...DEFAULT_TRACKED_ITEMS],
@@ -52,13 +50,7 @@ export const normalizeSettings = (raw) => {
   const copyStyle = VALID_COPY_STYLES.includes(raw.copyStyle)
     ? raw.copyStyle
     : DEFAULT_SETTINGS.copyStyle;
-  const alwaysOnTop = Boolean(raw.alwaysOnTop);
-  const compactOverlay = Boolean(raw.compactOverlay);
-
-  const parsedOpacity = raw.overlayOpacity != null ? Number(raw.overlayOpacity) : NaN;
-  const overlayOpacity = Number.isFinite(parsedOpacity)
-    ? Math.max(35, Math.min(100, Math.round(parsedOpacity)))
-    : DEFAULT_SETTINGS.overlayOpacity;
+  const compactMode = Boolean(raw.compactMode ?? raw.compactOverlay);
 
   const parsedRefresh = raw.autoRefreshMs != null ? Number(raw.autoRefreshMs) : NaN;
   const autoRefreshMs = Number.isFinite(parsedRefresh)
@@ -84,9 +76,7 @@ export const normalizeSettings = (raw) => {
     region,
     meterMode,
     copyStyle,
-    alwaysOnTop,
-    compactOverlay,
-    overlayOpacity,
+    compactMode,
     autoRefreshMs,
     selectedCities: selectedCities.length > 0 ? selectedCities : [...DEFAULT_CITIES],
     trackedItems: trackedItems.length > 0 ? trackedItems : [...DEFAULT_TRACKED_ITEMS],

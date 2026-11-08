@@ -85,8 +85,7 @@ mod tests {
     #[test]
     fn saves_then_loads_the_same_object() {
         let path = temp("roundtrip");
-        let settings =
-            json!({ "region": "europe", "compactOverlay": false, "meterMode": "damage" });
+        let settings = json!({ "region": "europe", "compactMode": false, "meterMode": "damage" });
         save(&path, &settings).unwrap();
         assert_eq!(load(&path).unwrap().settings, settings);
     }

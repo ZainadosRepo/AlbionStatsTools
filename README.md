@@ -47,15 +47,17 @@ Au lancement, l'appli regarde sur GitHub si une version plus récente est publi�
   - Détection automatique des entrées d'instances, chronomètre, renommée et argent par instance, coffres ouverts et feux follets en cage libérés.
 - **⛏ Journal de Récolte (Gathering)**
   - Comptabilisation par filon (`Bois`, `Minerai`, `Fibre`, `Peau`, `Pierre`, `Poisson`) avec séparation du rendement de base, du **bonus de récolteur** et du **bonus Premium**, ainsi que l'estimation en argent.
-- **🎒 Journal de Butin & Inspection de Groupe**
-  - Inspection des 10 emplacements d'équipement des membres du groupe et des joueurs à proximité avec estimation de la valeur du build.
-  - Journal de butin avec fenêtre de **déduplication de 2 secondes** et export **CSV**.
+- **🎒 Journal de Butin & Équipement du Groupe**
+  - Inspection des 10 emplacements d'équipement du joueur local et des membres de son groupe uniquement, avec estimation de la valeur du build.
+  - Journal de butin du joueur et du groupe avec fenêtre de **déduplication de 2 secondes** et export **CSV**.
 - **⚖ Marché, Courriers & Calculateur d'Artisanat (RRR)**
   - Calculateur de rendement de retour des ressources (`RRR = 1 - 1 / (1 + bonus / 100)`), frais de station par 100 points de nutrition, profit des journaux, taxes du marché (avec/sans Premium, vente directe ou ordre de vente) et marge nette par lot.
   - Interrogation directe des serveurs **Albion Data Project** (`Europe`, `Amériques`, `Asie`) et détection des écarts d'arbitrage entre cités.
-- **◫ Mode Mini-Overlay & Raccourci Global**
-  - Raccourci global **`Ctrl + Alt + M`** pour afficher ou masquer la fenêtre par-dessus le jeu.
-  - Mode **Overlay Compact** et bouton d'épinglage **Always on Top**.
+- **🪟 Fenêtre Séparée & Conformité SBI (Sandbox Interactive)**
+  - **Lecture passive externe uniquement** : aucune injection mémoire/DLL ni modification des fichiers du client de jeu.
+  - **Aucun overlay intrusif en jeu** : l'application s'exécute dans une fenêtre séparée opaque standard (idéale sur un second écran ou en tâche de fond, avec mode d'affichage **Compact** adaptatif), sans superposition *Always on Top* ni souris traversante.
+  - **Limitation stricte au groupe** : seules vos propres statistiques et celles des membres de votre groupe sont mesurées et affichées (aucune donnée ni inspection sur les joueurs tiers ou ennemis, aucun radar d'entités).
+  - **Zéro automatisation** : aucune macro, action automatique ni alerte tactique en combat.
 
 ---
 
