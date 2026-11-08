@@ -243,16 +243,6 @@ const persistSettings = async () => {
   }
 };
 
-const applyOverlayOpacity = () => {
-  const ratio = Math.max(0.35, Math.min(1, (Number(settings.overlayOpacity) || 96) / 100));
-  document.documentElement.style.setProperty("--shell-opacity", ratio.toFixed(2));
-  const slider = el("overlay-opacity");
-  if (slider && Number(slider.value) !== settings.overlayOpacity) {
-    slider.value = String(settings.overlayOpacity);
-  }
-  if (slider) slider.title = `Opacité de la fenêtre (${settings.overlayOpacity}%)`;
-};
-
 const syncMaximizedState = async () => {
   let isMax = browserMaximizedFallback;
   if (tauriWindow?.isMaximized) {
@@ -290,17 +280,8 @@ const toggleMaximizeWindow = async () => {
 
 const applyWindowPreferences = async () => {
   const shell = el("app");
-  shell?.classList.toggle("compact-overlay", settings.compactOverlay);
-  el("btn-compact")?.classList.toggle("active", settings.compactOverlay);
-  el("btn-pin")?.classList.toggle("active", settings.alwaysOnTop);
-  applyOverlayOpacity();
-  if (tauriWindow?.setAlwaysOnTop) {
-    try {
-      await tauriWindow.setAlwaysOnTop(settings.alwaysOnTop);
-    } catch (e) {
-      console.warn("setAlwaysOnTop:", e);
-    }
-  }
+  shell?.classList.toggle("compact-layout", settings.compactMode);
+  el("btn-compact")?.classList.toggle("active", settings.compactMode);
   await syncMaximizedState();
 };
 
@@ -365,12 +346,6 @@ const renderHeader = () => {
       syncBtn.title = `Catalogue : ${formatExactInt(snap.catalogItemCount)} objets • ${formatExactInt(snap.catalogSpellCount || 0)} sorts • ${formatExactInt(snap.catalogRecipeCount || 0)} recettes — cliquer pour synchroniser ao-bin-dumps`;
     }
   }
-
-  const clickThrough = Boolean(latestState?.clickThrough);
-  el("btn-click-through")?.classList.toggle("active", clickThrough);
-  el("app")?.classList.toggle("click-through", clickThrough);
-  const ctBanner = el("click-through-banner");
-  if (ctBanner) ctBanner.hidden = !clickThrough;
 
   const lp = snap.localPlayer;
   const guildTag = lp.guildName ? ` [${lp.guildName}]` : "";
@@ -769,7 +744,7 @@ const renderLootAndInspectTab = () => {
   const players = snap?.inspectedPlayers || [];
   el("inspect-count-badge").textContent = `${players.length} joueur${players.length > 1 ? "s" : ""}`;
   if (players.length === 0) {
-    el("inspect-cards").innerHTML = `<div class="empty-state">Aucun joueur inspecté à proximité.</div>`;
+    el("inspect-cards").innerHTML = `<div class="empty-state">Aucun membre du groupe détecté.</div>`;
   } else {
     el("inspect-cards").innerHTML = players
       .map(
@@ -1568,7 +1543,6 @@ const computeStateSignature = (res) => {
     s.catalogItemCount || 0,
     s.catalogSpellCount || 0,
     s.catalogRecipeCount || 0,
-    res?.clickThrough ? 1 : 0,
     s.snapshots?.length || 0,
     s.archivedSessions?.length || 0,
     s.localPlayer?.inCombat ? Math.floor(s.combatSeconds || 0) : 0,
@@ -1660,37 +1634,9 @@ const initEvents = () => {
   });
 
   el("btn-compact")?.addEventListener("click", async () => {
-    settings.compactOverlay = !settings.compactOverlay;
+    settings.compactMode = !settings.compactMode;
     await applyWindowPreferences();
     await persistSettings();
-  });
-
-  el("btn-pin")?.addEventListener("click", async () => {
-    settings.alwaysOnTop = !settings.alwaysOnTop;
-    await applyWindowPreferences();
-    await persistSettings();
-    showToast(settings.alwaysOnTop ? "Fenêtre épinglée au-dessus du jeu" : "Épinglage désactivé");
-  });
-
-  el("btn-click-through")?.addEventListener("click", async () => {
-    const next = !latestState?.clickThrough;
-    try {
-      await invokeCmd("set_click_through", { enabled: next });
-      await refreshState(true);
-      if (next) {
-        showToast("Souris traversante activée — Ctrl+Alt+L pour déverrouiller.");
-      }
-    } catch (err) {
-      showToast(`Mode souris traversante indisponible : ${err}`);
-    }
-  });
-
-  let opacityPersistTimer = null;
-  el("overlay-opacity")?.addEventListener("input", (ev) => {
-    settings.overlayOpacity = Math.max(35, Math.min(100, Math.round(Number(ev.target.value) || 96)));
-    applyOverlayOpacity();
-    if (opacityPersistTimer) clearTimeout(opacityPersistTimer);
-    opacityPersistTimer = setTimeout(() => persistSettings(), 400);
   });
 
   el("btn-min")?.addEventListener("click", () => tauriWindow?.minimize?.());
@@ -1698,7 +1644,7 @@ const initEvents = () => {
   el("btn-close")?.addEventListener("click", () => tauriWindow?.close?.());
 
   document.querySelector(".titlebar")?.addEventListener("dblclick", (ev) => {
-    if (ev.target.closest("button, input, select, label, .opacity-control")) return;
+    if (ev.target.closest("button, input, select, label")) return;
     if (!tauriWindow) {
       toggleMaximizeWindow();
     } else {

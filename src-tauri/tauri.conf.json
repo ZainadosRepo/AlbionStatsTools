@@ -1,14 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Albion Stats",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "identifier": "fr.zainadosrepo.albionstats",
   "build": {
     "frontendDist": "../ui"
   },
   "app": {
     "withGlobalTauri": true,
-    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
@@ -20,7 +19,7 @@
         "resizable": true,
         "alwaysOnTop": false,
         "decorations": false,
-        "transparent": true
+        "transparent": false
       }
     ],
     "security": {
