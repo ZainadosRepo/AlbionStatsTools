@@ -1257,7 +1257,7 @@ impl AnalyzerEngine {
                 .unwrap_or_else(|| format!("ITEM_{item_index}"))
         };
         let name_fr = if is_silver {
-            "Argent".into()
+            "Silver".into()
         } else {
             item.map(|i| i.name_fr.clone())
                 .unwrap_or_else(|| unique_name.clone())

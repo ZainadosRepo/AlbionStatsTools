@@ -380,7 +380,7 @@ const renderHeader = () => {
   el("header-player-name").title = displayName;
   el("header-map-name").textContent = lp.currentMapNameFr || "Caerleon";
   el("header-map-name").title = lp.currentMapNameFr || "Caerleon";
-  el("header-silver").textContent = `${formatExactInt(lp.silver)} Ag`;
+  el("header-silver").textContent = `${formatExactInt(lp.silver)} Silver`;
 };
 
 const renderSnapshotSelect = () => {
@@ -508,7 +508,17 @@ const renderCombatTab = () => {
 
 const renderSessionTab = () => {
   const snap = latestState?.snapshot;
-  if (!snap) return;
+  if (!snap) {
+    const archWrap = el("archived-session-rows");
+    if (archWrap && !archWrap.innerHTML) {
+      archWrap.innerHTML = `<div class="empty-state">Aucune session archivée. Cliquez sur <strong>Terminer &amp; enregistrer</strong> ou fermez l'application après une activité pour sauvegarder le bilan sur le disque.</div>`;
+    }
+    const facWrap = el("faction-rows");
+    if (facWrap && !facWrap.innerHTML) {
+      facWrap.innerHTML = `<div class="empty-state">Aucune activité de guerre de factions enregistrée.</div>`;
+    }
+    return;
+  }
   const s = snap.session;
   const lp = snap.localPlayer;
 
@@ -520,13 +530,13 @@ const renderSessionTab = () => {
   el("kpi-fame-hr").textContent = `${formatNumber(s.famePerHour)} / heure`;
   el("kpi-fame-extra").textContent = `Zone : ${formatNumber(s.zoneFame)} • Sacoche : ${formatNumber(s.satchelFame)}`;
 
-  el("kpi-silver").textContent = `${formatNumber(s.silver)} Ag`;
-  el("kpi-silver-hr").textContent = `${formatNumber(s.silverPerHour)} Ag / heure`;
+  el("kpi-silver").textContent = `${formatNumber(s.silver)} Silver`;
+  el("kpi-silver-hr").textContent = `${formatNumber(s.silverPerHour)} Silver / h`;
   el("kpi-silver-tax").textContent = `Taxe guilde : ${formatNumber(s.guildTaxPaid)} • Réparations : ${formatNumber(s.repairCosts)}`;
 
   el("kpi-respec").textContent = formatNumber(s.respecPoints);
   el("kpi-respec-hr").textContent = `${formatNumber(s.respecPerHour)} / heure`;
-  el("kpi-respec-cost").textContent = `Argent payé : ${formatNumber(s.respecPaidSilver)} Ag`;
+  el("kpi-respec-cost").textContent = `Silver payé : ${formatNumber(s.respecPaidSilver)} Silver`;
 
   el("kpi-might").textContent = `${formatNumber(s.might)} Might`;
   el("kpi-favor").textContent = `${formatNumber(s.favor)} Faveur`;
@@ -552,7 +562,7 @@ const renderSessionTab = () => {
             <tr>
               <th>Session</th>
               <th class="num-col">Renommée</th>
-              <th class="num-col">Argent</th>
+              <th class="num-col">Silver</th>
               <th class="num-col col-optional">Bilan</th>
               <th class="num-col"></th>
             </tr>
@@ -587,7 +597,7 @@ const renderSessionTab = () => {
                 </td>
                 <td class="num-col mono">
                   <div class="session-stat-stack">
-                    <span>${formatNumber(a.silver)} <span class="ag-tag">Ag</span></span>
+                    <span>${formatNumber(a.silver)} <span class="currency-tag">Silver</span></span>
                     <small class="session-stat-sub">${formatNumber(a.silverPerHour)}/h</small>
                   </div>
                 </td>
@@ -659,7 +669,7 @@ const renderDungeonsTab = () => {
           <th class="num-col">Durée</th>
           <th class="num-col">Renommée</th>
           <th class="num-col col-optional">Fame / h</th>
-          <th class="num-col">Argent</th>
+          <th class="num-col">Silver</th>
           <th class="num-col col-optional">Might / Faveur</th>
           <th class="num-col col-optional">Coffres / Wisps</th>
         </tr>
@@ -679,7 +689,7 @@ const renderDungeonsTab = () => {
             <td class="num-col mono">${formatDuration(d.durationSeconds)}</td>
             <td class="num-col mono">${formatNumber(d.fame)}</td>
             <td class="num-col mono col-optional text-accent">${formatNumber(d.famePerHour)}/h</td>
-            <td class="num-col mono">${formatNumber(d.silver)} Ag</td>
+            <td class="num-col mono">${formatNumber(d.silver)} Silver</td>
             <td class="num-col mono col-optional">${formatExactInt(d.might)} / ${formatExactInt(d.favor)}</td>
             <td class="num-col mono col-optional">${d.chestsOpened} / ${d.cagedWispsOpened}</td>
           </tr>
@@ -693,7 +703,13 @@ const renderDungeonsTab = () => {
 
 const renderGatheringTab = () => {
   const snap = latestState?.snapshot;
-  if (!snap) return;
+  if (!snap) {
+    const gWrap = el("gathering-rows");
+    if (gWrap && !gWrap.innerHTML) {
+      gWrap.innerHTML = `<div class="empty-state">Aucune récolte enregistrée durant cette session.</div>`;
+    }
+    return;
+  }
   const t = snap.gatheringTotals;
   el("gat-wood").textContent = formatExactInt(t.wood);
   el("gat-ore").textContent = formatExactInt(t.ore);
@@ -701,7 +717,7 @@ const renderGatheringTab = () => {
   el("gat-hide").textContent = formatExactInt(t.hide);
   el("gat-rock").textContent = formatExactInt(t.rock);
   el("gat-fish").textContent = formatExactInt(t.fish);
-  el("gathering-summary-badge").textContent = `${formatExactInt(t.totalResources)} ressources (${t.totalNodes} nœuds) • ~${formatNumber(t.totalEstimatedSilver)} Ag`;
+  el("gathering-summary-badge").textContent = `${formatExactInt(t.totalResources)} ressources (${t.totalNodes} nœuds) • ~${formatNumber(t.totalEstimatedSilver)} Silver`;
 
   const log = snap.gatheringLog || [];
   if (log.length === 0) {
@@ -738,7 +754,7 @@ const renderGatheringTab = () => {
             <td class="num-col mono col-optional">+${g.collectorBonus}</td>
             <td class="num-col mono col-optional">+${g.premiumBonus}</td>
             <td class="num-col mono"><strong>${g.totalAmount}</strong></td>
-            <td class="num-col mono text-accent">${formatExactInt(g.estimatedSilver)} Ag</td>
+            <td class="num-col mono text-accent">${formatExactInt(g.estimatedSilver)} Silver</td>
           </tr>
         `,
           )
@@ -750,9 +766,7 @@ const renderGatheringTab = () => {
 
 const renderLootAndInspectTab = () => {
   const snap = latestState?.snapshot;
-  if (!snap) return;
-
-  const players = snap.inspectedPlayers || [];
+  const players = snap?.inspectedPlayers || [];
   el("inspect-count-badge").textContent = `${players.length} joueur${players.length > 1 ? "s" : ""}`;
   if (players.length === 0) {
     el("inspect-cards").innerHTML = `<div class="empty-state">Aucun joueur inspecté à proximité.</div>`;
@@ -766,7 +780,7 @@ const renderLootAndInspectTab = () => {
             <strong>${escapeHtml(p.name)}</strong>
             ${p.guildName ? `<span class="badge-subtle">[${escapeHtml(p.guildName)}]</span>` : ""}
           </div>
-          <span class="mono text-accent">~${formatNumber(p.estimatedLoadoutValue)} Ag</span>
+          <span class="mono text-accent">~${formatNumber(p.estimatedLoadoutValue)} Silver</span>
         </div>
         <div class="slot-list">
           ${(p.slots || [])
@@ -789,7 +803,7 @@ const renderLootAndInspectTab = () => {
       .join("");
   }
 
-  const loot = snap.lootLog || [];
+  const loot = snap?.lootLog || [];
   if (loot.length === 0) {
     el("loot-rows").innerHTML = `<div class="empty-state">Aucun butin ramassé.</div>`;
   } else {
@@ -818,7 +832,7 @@ const renderLootAndInspectTab = () => {
                 </span>
               </td>
               <td class="num-col mono">×${l.quantity}</td>
-              <td class="num-col mono text-accent">${formatExactInt(l.estimatedSilver)} Ag</td>
+              <td class="num-col mono text-accent">${formatExactInt(l.estimatedSilver)} Silver</td>
             </tr>
           `,
             )
@@ -831,9 +845,8 @@ const renderLootAndInspectTab = () => {
 
 const renderCapturedMarketOrders = () => {
   const snap = latestState?.snapshot;
-  if (!snap) return;
-  const orders = snap.marketOrders || [];
-  const mails = snap.mailNotifications || [];
+  const orders = snap?.marketOrders || [];
+  const mails = snap?.mailNotifications || [];
   const total = orders.length + mails.length;
   const badge = el("market-orders-badge");
   if (badge) badge.textContent = `${total} capture${total > 1 ? "s" : ""}`;
@@ -872,8 +885,8 @@ const renderCapturedMarketOrders = () => {
               </span>
             </td>
             <td class="num-col mono">×${o.amount}</td>
-            <td class="num-col mono col-optional">${formatExactInt(o.unitPriceSilver)} Ag</td>
-            <td class="num-col mono"><strong>${formatExactInt(o.totalPriceSilver)} Ag</strong></td>
+            <td class="num-col mono col-optional">${formatExactInt(o.unitPriceSilver)} Silver</td>
+            <td class="num-col mono"><strong>${formatExactInt(o.totalPriceSilver)} Silver</strong></td>
           </tr>
         `,
           )
@@ -890,8 +903,8 @@ const renderCapturedMarketOrders = () => {
               </span>
             </td>
             <td class="num-col mono">×${m.amount}</td>
-            <td class="num-col mono col-optional">${formatExactInt(m.unitPriceSilver)} Ag</td>
-            <td class="num-col mono text-accent"><strong>${formatExactInt(m.totalPriceSilver)} Ag</strong></td>
+            <td class="num-col mono col-optional">${formatExactInt(m.unitPriceSilver)} Silver</td>
+            <td class="num-col mono text-accent"><strong>${formatExactInt(m.totalPriceSilver)} Silver</strong></td>
           </tr>
         `,
           )
@@ -899,6 +912,45 @@ const renderCapturedMarketOrders = () => {
       </tbody>
     </table>
   `;
+};
+
+const computeCraftingFallback = (input) => {
+  const qty = Math.max(1, Number(input.craftQuantity) || 1);
+  const bonus = Math.max(0, Number(input.productionBonusPercent) || 0);
+  const rrr = bonus > 0 ? 1 - 1 / (1 + bonus / 100) : 0;
+  let grossMat = 0;
+  let netMat = 0;
+  for (const mat of input.materials || []) {
+    const line = (Number(mat.quantityPerItem) || 0) * Math.max(0, Number(mat.unitPrice) || 0);
+    grossMat += line;
+    netMat += mat.isReturnable ? line * (1 - rrr) : line;
+  }
+  const itemValue = Math.max(0, Number(input.itemValue) || 0);
+  const feeRate = Math.max(0, Number(input.usageFeePer100Nutrition) || 0);
+  const stationFee = itemValue > 0 && feeRate > 0 ? itemValue * 0.1125 * (feeRate / 100) : 0;
+  const marketTaxRate = (input.isPremium ? 0.04 : 0.08) + (input.isSellOrder ? 0.025 : 0);
+  const sellUnit = Math.max(0, Number(input.sellUnitPrice) || 0);
+  const marketFee = sellUnit * marketTaxRate;
+  const totalCostPerItem = netMat + stationFee + marketFee;
+  const netRevenuePerItem = sellUnit + Math.max(0, Number(input.journalProfitPerItem) || 0);
+  const netProfitPerItem = netRevenuePerItem - totalCostPerItem;
+  return {
+    itemName: input.itemName,
+    craftQuantity: qty,
+    resourceReturnRate: rrr,
+    grossMaterialCostPerItem: grossMat,
+    netMaterialCostPerItem: netMat,
+    stationFeePerItem: stationFee,
+    marketTaxRate,
+    marketFeePerItem: marketFee,
+    totalCostPerItem,
+    netRevenuePerItem,
+    netProfitPerItem,
+    totalBatchCost: totalCostPerItem * qty,
+    totalBatchRevenue: netRevenuePerItem * qty,
+    totalBatchProfit: netProfitPerItem * qty,
+    marginPercent: totalCostPerItem > 0 ? (netProfitPerItem / totalCostPerItem) * 100 : 0,
+  };
 };
 
 const updateCraftingSimulation = async () => {
@@ -942,7 +994,7 @@ const updateCraftingSimulation = async () => {
     ],
   };
 
-  const res = await invokeCmd("calculate_crafting", { input });
+  const res = (await invokeCmd("calculate_crafting", { input })) || computeCraftingFallback(input);
   if (!res) return;
 
   const isProfitable = res.totalBatchProfit >= 0;
@@ -973,10 +1025,10 @@ const updateCraftingSimulation = async () => {
           </span>
           <div class="craft-hero-main">
             <span class="hero-num">${isProfitable ? "+" : ""}${formatExactInt(res.totalBatchProfit)}</span>
-            <span class="hero-unit">Ag</span>
+            <span class="hero-unit">Silver</span>
           </div>
           <div class="craft-hero-sub">
-            <span class="mono">${isProfitable ? "+" : ""}${formatExactInt(res.netProfitPerItem)} Ag/u</span>
+            <span class="mono">${isProfitable ? "+" : ""}${formatExactInt(res.netProfitPerItem)} Silver/u</span>
             <span class="hero-sep">•</span>
             <span>ROI <strong class="mono">${roiPercent >= 0 ? "+" : ""}${roiPercent.toFixed(1)}%</strong></span>
             <span class="hero-sep">•</span>
@@ -991,28 +1043,28 @@ const updateCraftingSimulation = async () => {
 
       <div class="cost-ledger" aria-label="Détail du calcul du coût unitaire">
         <div class="ledger-row">
-          <span class="ledger-label">Ressources avec RRR <small>(${formatExactInt(matRetVal)} − ${rrrPct}% = −${formatExactInt(savedPerItem)} Ag)</small></span>
-          <span class="ledger-val mono">${formatExactInt(netReturnablePerItem)} Ag</span>
+          <span class="ledger-label">Ressources avec RRR <small>(${formatExactInt(matRetVal)} − ${rrrPct}% = −${formatExactInt(savedPerItem)} Silver)</small></span>
+          <span class="ledger-val mono">${formatExactInt(netReturnablePerItem)} Silver</span>
         </div>
         <div class="ledger-row">
           <span class="ledger-label">Artefacts &amp; cœurs <small>(sans retour RRR)</small></span>
-          <span class="ledger-val mono">+ ${formatExactInt(matArtVal)} Ag</span>
+          <span class="ledger-val mono">+ ${formatExactInt(matArtVal)} Silver</span>
         </div>
         <div class="ledger-row">
           <span class="ledger-label">Taxe station <small>(${formatExactInt(itemVal)} × 0,1125 × ${feeVal}/100)</small></span>
-          <span class="ledger-val mono">+ ${formatExactInt(stationFeePerItem)} Ag</span>
+          <span class="ledger-val mono">+ ${formatExactInt(stationFeePerItem)} Silver</span>
         </div>
         <div class="ledger-row">
-          <span class="ledger-label">Taxes marché <small>(${taxPct}% sur ${formatExactInt(sellVal)} Ag)</small></span>
-          <span class="ledger-val mono">+ ${formatExactInt(marketFeePerItem)} Ag</span>
+          <span class="ledger-label">Taxes marché <small>(${taxPct}% sur ${formatExactInt(sellVal)} Silver)</small></span>
+          <span class="ledger-val mono">+ ${formatExactInt(marketFeePerItem)} Silver</span>
         </div>
         <div class="ledger-row ledger-total">
-          <span class="ledger-label">Coût complet / u <small>(lot ×${res.craftQuantity} : ${formatExactInt(totalCost)} Ag)</small></span>
-          <strong class="ledger-val mono">${formatExactInt(res.totalCostPerItem)} Ag</strong>
+          <span class="ledger-label">Coût complet / u <small>(lot ×${res.craftQuantity} : ${formatExactInt(totalCost)} Silver)</small></span>
+          <strong class="ledger-val mono">${formatExactInt(res.totalCostPerItem)} Silver</strong>
         </div>
         <div class="ledger-row ledger-revenue">
-          <span class="ledger-label">Recette vente + journal / u <small>(lot ×${res.craftQuantity} : ${formatExactInt(totalRevenue)} Ag)</small></span>
-          <strong class="ledger-val mono text-accent">${formatExactInt(res.netRevenuePerItem)} Ag</strong>
+          <span class="ledger-label">Recette vente + journal / u <small>(lot ×${res.craftQuantity} : ${formatExactInt(totalRevenue)} Silver)</small></span>
+          <strong class="ledger-val mono text-accent">${formatExactInt(res.netRevenuePerItem)} Silver</strong>
         </div>
       </div>
 
@@ -1104,7 +1156,7 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
           (acc, l) => acc + (Number(l.estimatedSilver) || 0),
           0,
         ) + (latestState?.snapshot?.gatheringTotals?.totalEstimatedSilver || 0);
-      banner.innerHTML = `Valeur marché réelle de la session : <strong class="mono">${formatExactInt(total)} Ag</strong> • ${pricedItems}/${items.length} objet(s) cotés • estimation catalogue : <span class="mono">${formatExactInt(estimated)} Ag</span>`;
+      banner.innerHTML = `Valeur marché réelle de la session : <strong class="mono">${formatExactInt(total)} Silver</strong> • ${pricedItems}/${items.length} objet(s) cotés • estimation catalogue : <span class="mono">${formatExactInt(estimated)} Silver</span>`;
       banner.hidden = false;
     }
 
@@ -1138,7 +1190,7 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
               if (hasSpread) {
                 arbHtml = `
                   <span class="arbitrage-pill mono ${isProfitSpread ? "arb-profit" : "arb-loss"}">
-                    ${isProfitSpread ? "+" : ""}${formatExactInt(r.spreadSilver)} Ag (${isProfitSpread ? "+" : ""}${r.spreadPercent.toFixed(1)}%)
+                    ${isProfitSpread ? "+" : ""}${formatExactInt(r.spreadSilver)} Silver (${isProfitSpread ? "+" : ""}${r.spreadPercent.toFixed(1)}%)
                   </span>
                 `;
               }
@@ -1160,7 +1212,7 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
                   hasSell
                     ? `
                   <div class="price-stack">
-                    <span class="silver-amount mono">${formatExactInt(r.bestSellPrice)} <span class="ag-tag">Ag</span></span>
+                    <span class="silver-amount mono">${formatExactInt(r.bestSellPrice)} <span class="currency-tag">Silver</span></span>
                     ${renderCityBadge(r.bestSellCity)}
                   </div>
                 `
@@ -1172,7 +1224,7 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
                   hasBuy
                     ? `
                   <div class="price-stack">
-                    <span class="silver-amount mono">${formatExactInt(r.bestBuyOrder)} <span class="ag-tag">Ag</span></span>
+                    <span class="silver-amount mono">${formatExactInt(r.bestBuyOrder)} <span class="currency-tag">Silver</span></span>
                     ${renderCityBadge(r.bestBuyCity)}
                   </div>
                 `
@@ -1248,8 +1300,8 @@ const renderRecipeBreakdown = (recipe, evalRes = null) => {
               ing.unitPrice > 0
                 ? `
               ${renderCityBadge(ing.city)}
-              <span class="recipe-unit-price mono">${formatExactInt(ing.unitPrice)} <span class="ag-tag">Ag</span></span>
-              <strong class="recipe-line-total mono">${formatExactInt(ing.linePerCraftedUnit)} Ag</strong>
+              <span class="recipe-unit-price mono">${formatExactInt(ing.unitPrice)} <span class="currency-tag">Silver</span></span>
+              <strong class="recipe-line-total mono">${formatExactInt(ing.linePerCraftedUnit)} Silver</strong>
             `
                 : `<span class="rrr-tag is-missing">Non coté</span>`
             }
@@ -1291,7 +1343,7 @@ const loadAndPriceCraftingRecipe = async (ctx, showFeedbackToast = false) => {
     }
     await updateCraftingSimulation();
     if (showFeedbackToast) {
-      showToast(`Calculateur mis à jour : ${ctx.name}${ctx.price > 0 ? ` (${formatExactInt(ctx.price)} Ag)` : ""}`);
+      showToast(`Calculateur mis à jour : ${ctx.name}${ctx.price > 0 ? ` (${formatExactInt(ctx.price)} Silver)` : ""}`);
     }
     return;
   }
@@ -1319,7 +1371,7 @@ const loadAndPriceCraftingRecipe = async (ctx, showFeedbackToast = false) => {
 
     const evalRes = computeRecipeMaterialCosts(recipe, matSummarized);
     if (el("craft-mat-ret")) el("craft-mat-ret").value = String(evalRes.returnablePerUnit);
-    if (el("craft-mat-art")) el("craft-mat-art").value = String(evalRes.nonReturnablePerUnit);
+    if (el("craft-mat-art")) el("craft-mat-art").value = String(evalRes.artefactCost ?? evalRes.nonReturnablePerUnit);
 
     renderRecipeBreakdown(recipe, evalRes);
 
@@ -1333,7 +1385,7 @@ const loadAndPriceCraftingRecipe = async (ctx, showFeedbackToast = false) => {
     await updateCraftingSimulation();
     if (showFeedbackToast) {
       showToast(
-        `Recette chargée : ${ctx.name} — RRR ${formatExactInt(evalRes.returnablePerUnit)} Ag${evalRes.nonReturnablePerUnit > 0 ? ` • Artefact ${formatExactInt(evalRes.nonReturnablePerUnit)} Ag` : ""}`,
+        `Recette chargée : ${ctx.name} — RRR ${formatExactInt(evalRes.returnablePerUnit)} Silver${evalRes.nonReturnablePerUnit > 0 ? ` • Artefact ${formatExactInt(evalRes.nonReturnablePerUnit)} Silver` : ""}`,
       );
     }
   } catch (err) {
@@ -1702,7 +1754,7 @@ const initEvents = () => {
     if (archived) {
       await refreshState(true);
       showToast(
-        `Session enregistrée : ${archived.label} (${formatNumber(archived.fame)} Fame • ${formatNumber(archived.silver)} Ag).`,
+        `Session enregistrée : ${archived.label} (${formatNumber(archived.fame)} Fame • ${formatNumber(archived.silver)} Silver).`,
       );
     } else {
       showToast("Aucune activité de session à enregistrer pour le moment.");
