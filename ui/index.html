@@ -221,7 +221,7 @@
           <span class="pill-sep" aria-hidden="true"></span>
           <span class="pill-seg pill-seg-map">
             <svg class="ico pill-ico"><use href="#ico-pin-map"></use></svg>
-            <span id="header-map-name" class="player-map">Caerleon</span>
+            <span id="header-map-name" class="player-map">En attente…</span>
           </span>
           <span class="pill-sep" aria-hidden="true"></span>
           <span class="pill-seg pill-seg-silver">
@@ -571,13 +571,13 @@
                   <label class="field">
                     <span class="field-title">Objet fabriqué</span>
                     <div class="input-wrap">
-                      <input id="craft-name" type="text" value="Lames sculptées T7.1" required />
+                      <input id="craft-name" type="text" placeholder="ex: Lames sculptées T7.1" />
                     </div>
                   </label>
                   <label class="field">
                     <span class="field-title">Quantité</span>
                     <div class="input-wrap has-suffix">
-                      <input id="craft-qty" type="number" min="1" max="9999" value="10" required />
+                      <input id="craft-qty" type="number" min="1" max="9999" value="1" />
                       <span class="input-suffix">u</span>
                     </div>
                   </label>
@@ -587,20 +587,20 @@
                   <label class="field">
                     <span class="field-title">Prix vente / u</span>
                     <div class="input-wrap has-suffix">
-                      <input id="craft-sell" type="number" min="0" step="100" value="445000" required />
+                      <input id="craft-sell" type="number" min="0" step="100" placeholder="0" />
                       <span class="input-suffix currency-silver">Silver</span>
                     </div>
                   </label>
                   <label class="field">
                     <span class="field-title" title="Valeur interne de l'objet servant à calculer la nutrition consommée à l'établi (ItemValue × 0,1125)">ItemValue (nutr.)</span>
                     <div class="input-wrap">
-                      <input id="craft-item-val" type="number" min="0" step="10" value="5120" required />
+                      <input id="craft-item-val" type="number" min="0" step="10" placeholder="0" />
                     </div>
                   </label>
                   <label class="field">
                     <span class="field-title">Gain journal / u</span>
                     <div class="input-wrap has-suffix">
-                      <input id="craft-journal" type="number" min="0" step="100" value="14500" required />
+                      <input id="craft-journal" type="number" min="0" step="100" placeholder="0" />
                       <span class="input-suffix currency-silver">Silver</span>
                     </div>
                   </label>
@@ -618,14 +618,14 @@
                       </div>
                     </div>
                     <div class="input-wrap has-suffix">
-                      <input id="craft-bonus" type="number" min="0" max="200" step="0.1" value="18.0" required />
+                      <input id="craft-bonus" type="number" min="0" max="200" step="0.1" value="18.0" />
                       <span class="input-suffix">%</span>
                     </div>
                   </div>
                   <label class="field">
                     <span class="field-title">Taxe station / 100 nutr.</span>
                     <div class="input-wrap has-suffix">
-                      <input id="craft-fee" type="number" min="0" step="10" value="450" required />
+                      <input id="craft-fee" type="number" min="0" step="10" value="0" placeholder="0" />
                       <span class="input-suffix currency-silver">Silver</span>
                     </div>
                   </label>
@@ -635,14 +635,14 @@
                   <label class="field">
                     <span class="field-title">Ressources soumises au RRR / u</span>
                     <div class="input-wrap has-suffix">
-                      <input id="craft-mat-ret" type="number" min="0" step="100" value="288400" required />
+                      <input id="craft-mat-ret" type="number" min="0" step="100" placeholder="0" />
                       <span class="input-suffix currency-silver">Silver</span>
                     </div>
                   </label>
                   <label class="field">
                     <span class="field-title">Artefacts &amp; cœurs (0% RRR) / u</span>
                     <div class="input-wrap has-suffix">
-                      <input id="craft-mat-art" type="number" min="0" step="100" value="85000" required />
+                      <input id="craft-mat-art" type="number" min="0" step="100" placeholder="0" />
                       <span class="input-suffix currency-silver">Silver</span>
                     </div>
                   </label>

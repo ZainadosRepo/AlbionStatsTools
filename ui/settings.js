@@ -14,13 +14,7 @@ export const DEFAULT_CITIES = [
   "Brecilien",
 ];
 
-export const DEFAULT_TRACKED_ITEMS = [
-  "T7_2H_CLEAVER_HELL@1",
-  "T8_MAIN_HOLYSTAFF_AVALON@2",
-  "T8_2H_BOW_AVALON@2",
-  "T8_2H_INFERNOSTAFF_MORGANA@2",
-  "T8_BAG_INSIGHT",
-];
+export const DEFAULT_TRACKED_ITEMS = [];
 
 export const DEFAULT_SETTINGS = Object.freeze({
   region: "europe",
@@ -79,6 +73,6 @@ export const normalizeSettings = (raw) => {
     compactMode,
     autoRefreshMs,
     selectedCities: selectedCities.length > 0 ? selectedCities : [...DEFAULT_CITIES],
-    trackedItems: trackedItems.length > 0 ? trackedItems : [...DEFAULT_TRACKED_ITEMS],
+    trackedItems,
   };
 };

@@ -289,7 +289,7 @@ const activeMeterDataset = () => {
   const snap = latestState?.snapshot;
   if (!snap) {
     return {
-      mapName: "Caerleon",
+      mapName: "En attente…",
       combatSeconds: 0,
       totalDamage: 0,
       totalHeal: 0,
@@ -311,7 +311,7 @@ const activeMeterDataset = () => {
     }
   }
   return {
-    mapName: snap.localPlayer?.currentMapNameFr || "Caerleon",
+    mapName: snap.localPlayer?.currentMapNameFr || "En attente…",
     combatSeconds: snap.combatSeconds || 0,
     totalDamage: snap.totalPartyDamage || 0,
     totalHeal: snap.totalPartyHeal || 0,
@@ -351,10 +351,12 @@ const renderHeader = () => {
   const guildTag = lp.guildName ? ` [${lp.guildName}]` : "";
   const rawName = String(lp.username || "En attente…");
   const displayName = rawName.startsWith("En attente") ? "En attente…" : `${rawName}${guildTag}`;
+  const rawMap = String(lp.currentMapNameFr || "En attente…");
+  const displayMap = rawMap.startsWith("En attente") ? "En attente…" : rawMap;
   el("header-player-name").textContent = displayName;
   el("header-player-name").title = displayName;
-  el("header-map-name").textContent = lp.currentMapNameFr || "Caerleon";
-  el("header-map-name").title = lp.currentMapNameFr || "Caerleon";
+  el("header-map-name").textContent = displayMap;
+  el("header-map-name").title = displayMap;
   el("header-silver").textContent = `${formatExactInt(lp.silver)} Silver`;
 };
 
@@ -929,6 +931,7 @@ const computeCraftingFallback = (input) => {
 };
 
 const updateCraftingSimulation = async () => {
+  const craftName = (el("craft-name")?.value || "").trim();
   const matRetVal = Math.max(0, Number(el("craft-mat-ret")?.value) || 0);
   const matArtVal = Math.max(0, Number(el("craft-mat-art")?.value) || 0);
   const sellVal = Math.max(0, Number(el("craft-sell")?.value) || 0);
@@ -943,8 +946,20 @@ const updateCraftingSimulation = async () => {
     b.classList.toggle("active", Math.abs(val - bonusVal) < 0.05);
   });
 
+  const resDiv = el("craft-result");
+  if (!resDiv) return;
+
+  if (!craftName && sellVal === 0 && matRetVal === 0 && matArtVal === 0) {
+    resDiv.innerHTML = `
+      <div class="empty-state">
+        Cliquez sur <strong>Craft</strong> sur un objet suivi ou renseignez le formulaire ci-dessus pour simuler les rendements (RRR), taxes et marge nette.
+      </div>
+    `;
+    return;
+  }
+
   const input = {
-    itemName: el("craft-name")?.value || "Objet",
+    itemName: craftName || "Objet",
     craftQuantity: qty,
     sellUnitPrice: sellVal,
     itemValue: itemVal,
@@ -1406,12 +1421,9 @@ const addTrackedItem = async (item) => {
 
 const removeTrackedItem = async (itemId) => {
   const remaining = settings.trackedItems.filter((id) => id !== itemId);
-  if (remaining.length === 0) {
-    showToast("Gardez au moins un objet suivi.");
-    return;
-  }
   settings = normalizeSettings({ ...settings, trackedItems: remaining });
   await persistSettings();
+  showToast("Objet retiré des objets suivis.");
   await fetchAlbionDataPrices();
 };
 
@@ -1871,7 +1883,10 @@ const boot = async () => {
 
   const priceWrap = el("api-price-rows");
   if (priceWrap) {
-    priceWrap.innerHTML = `<div class="empty-state">${settings.trackedItems.length} objet(s) suivi(s). Cliquez sur <strong>Actualiser</strong> ou recherchez un objet pour l'ajouter.</div>`;
+    priceWrap.innerHTML =
+      settings.trackedItems.length > 0
+        ? `<div class="empty-state">${settings.trackedItems.length} objet(s) suivi(s). Cliquez sur <strong>Actualiser</strong> ou recherchez un objet pour l'ajouter.</div>`
+        : `<div class="empty-state">Aucun objet suivi. Utilisez la barre de recherche ci-dessus pour ajouter des objets du marché à surveiller.</div>`;
   }
 
   setInterval(() => refreshState(false), settings.autoRefreshMs);
