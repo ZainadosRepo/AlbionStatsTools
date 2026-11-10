@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "albion-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "albion-stats"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "albion-core",
  "serde",
