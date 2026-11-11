@@ -144,10 +144,7 @@ fn clear_gathering(
 }
 
 #[tauri::command]
-fn clear_loot(
-    app: AppHandle,
-    state: tauri::State<AppState>,
-) -> Result<FullStatusResponse, String> {
+fn clear_loot(app: AppHandle, state: tauri::State<AppState>) -> Result<FullStatusResponse, String> {
     {
         let mut eng = state
             .engine

@@ -77,7 +77,11 @@ fn enumerate_windows_adapter_ips(out: &mut Vec<Ipv4Addr>) {
                     }
                     let row = *(buf.as_ptr().add(offset) as *const MibIpAddrRow);
                     let ip = Ipv4Addr::from(u32::from_be(row.dw_addr));
-                    if !ip.is_loopback() && !ip.is_unspecified() && !ip.is_link_local() && !out.contains(&ip) {
+                    if !ip.is_loopback()
+                        && !ip.is_unspecified()
+                        && !ip.is_link_local()
+                        && !out.contains(&ip)
+                    {
                         out.push(ip);
                     }
                 }
@@ -93,8 +97,8 @@ pub fn detect_candidate_ipv4s() -> Vec<Ipv4Addr> {
     const ROUTE_PROBES: [&str; 6] = [
         "193.169.238.1:5056", // Europe (Amsterdam)
         "193.169.239.1:5056",
-        "5.45.187.1:5056",    // Americas (Washington)
-        "5.188.125.1:5056",   // Asia (Singapore)
+        "5.45.187.1:5056",  // Americas (Washington)
+        "5.188.125.1:5056", // Asia (Singapore)
         "1.1.1.1:53",
         "8.8.8.8:53",
     ];
@@ -112,7 +116,11 @@ pub fn detect_candidate_ipv4s() -> Vec<Ipv4Addr> {
         }
         if let Ok(addr) = sock.local_addr() {
             if let IpAddr::V4(ip) = addr.ip() {
-                if !ip.is_loopback() && !ip.is_unspecified() && !ip.is_link_local() && !out.contains(&ip) {
+                if !ip.is_loopback()
+                    && !ip.is_unspecified()
+                    && !ip.is_link_local()
+                    && !out.contains(&ip)
+                {
                     out.push(ip);
                 }
             }

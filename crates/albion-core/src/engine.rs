@@ -1107,7 +1107,10 @@ impl AnalyzerEngine {
             .unwrap_or(false);
 
         if !causer_in_party && !affected_in_party {
-            if self.local_player.object_id == 0 && tick.causer_id != 0 && self.party_guids.is_empty() {
+            if self.local_player.object_id == 0
+                && tick.causer_id != 0
+                && self.party_guids.is_empty()
+            {
                 self.adopt_local_object_id(tick.causer_id);
                 causer_in_party = true;
             } else {
