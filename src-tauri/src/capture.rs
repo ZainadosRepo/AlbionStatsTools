@@ -307,7 +307,7 @@ fn macos_bpf_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mutex<
             "-xx",
             "-s",
             "0",
-            "udp and (port 5056 or port 5055 or port 4535)",
+            "udp and (portrange 5055-5060 or portrange 4530-4540)",
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -331,7 +331,7 @@ fn macos_bpf_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mutex<
             if let Ok(mut st) = status.lock() {
                 st.mode = "rawSocket".into();
                 st.bind_address = "any:5056".into();
-                st.detail = "Capture passive macOS BPF active (UDP 5056/5055/4535)".into();
+                st.detail = "Capture passive macOS BPF active (UDP 5055-5060/4530-4540)".into();
             }
         }
         if parse_tcpdump_hex_line(&line, &mut frame) {
@@ -543,7 +543,7 @@ fn windows_raw_interface_loop(
             st.mode = "rawSocket".into();
             st.bind_address = format!("{local_ip}:5056");
             st.detail = format!(
-                "Capture directe Photon multi-interfaces active sur {local_ip} (UDP 5056/5055/4535)"
+                "Capture directe Photon multi-interfaces active sur {local_ip} (UDP 5055-5060/4530-4540)"
             );
             st.needs_elevation = false;
         }

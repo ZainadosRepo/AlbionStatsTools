@@ -325,12 +325,51 @@ const renderHeader = () => {
   const cap = latestState?.capture;
   if (!snap) return;
 
+  const lp = snap.localPlayer || {};
+  const rawName = String(lp.username || "En attente…");
+  const isStandby = rawName.startsWith("En attente");
+  const rawPkts = cap?.rawDatagramsSeen || 0;
+  const procPkts = snap.network?.packetsProcessed || 0;
+  const totalPkts = Math.max(rawPkts, procPkts);
+  const totalEvents = snap.network?.telemetryEventsProcessed || 0;
+
   const badge = el("capture-badge");
   if (badge && cap) {
-    const isLive = cap.mode === "rawSocket";
-    badge.className = `status-badge ${isLive ? "status-live" : "status-standby"}`;
-    badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">${isLive ? "UDP 5056" : "Simulateur"}</span>`;
-    badge.title = cap.detail || "";
+    const isRaw = cap.mode === "rawSocket";
+    if (!isRaw) {
+      badge.className = "status-badge status-standby";
+      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">Simulateur</span>`;
+      badge.title = cap.detail || "Mode veille / simulateur";
+    } else if (totalPkts === 0) {
+      badge.className = "status-badge status-listening";
+      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">UDP 5056 (Écoute)</span>`;
+      badge.title = `Capture active sur ${cap.bindAddress} (0 paquet capturé)\n\n• Si Albion est ouvert, changez de zone ou attaquez un monstre pour générer du trafic.\n• Si aucun paquet n'apparaît après avoir bougé, vérifiez le Pare-feu Windows ou votre VPN (ExitLag/WARP).`;
+    } else if (isStandby) {
+      badge.className = "status-badge status-syncing";
+      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">UDP 5056 (${formatExactInt(totalPkts)} pkts)</span>`;
+      badge.title = `${formatExactInt(totalPkts)} paquets Photon capturés (${formatExactInt(totalEvents)} événements).\n\nEn attente de synchronisation du profil : changez de zone (portail / donjon) ou combattez un monstre pour initialiser votre personnage.`;
+    } else {
+      badge.className = "status-badge status-live";
+      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">UDP 5056</span>`;
+      badge.title = `Capture active sur ${cap.bindAddress}\n• ${formatExactInt(totalPkts)} paquets capturés\n• ${formatExactInt(totalEvents)} événements décodés`;
+    }
+  }
+
+  const syncBanner = el("sync-banner");
+  if (syncBanner) {
+    if (isStandby) {
+      syncBanner.hidden = false;
+      const statEl = el("sync-banner-stat");
+      if (statEl) {
+        if (totalPkts > 0) {
+          statEl.textContent = `${formatExactInt(totalPkts)} paquets détectés (changement de zone requis)`;
+        } else {
+          statEl.textContent = "Écoute active (0 paquet capturé)";
+        }
+      }
+    } else {
+      syncBanner.hidden = true;
+    }
   }
 
   const elevateBtn = el("btn-elevate");
@@ -347,13 +386,10 @@ const renderHeader = () => {
     }
   }
 
-  const lp = snap.localPlayer;
   const guildTag = lp.guildName ? ` [${lp.guildName}]` : "";
-  const rawName = String(lp.username || "En attente…");
-  const isStandby = rawName.startsWith("En attente");
   const displayName = isStandby ? "En attente…" : `${rawName}${guildTag}`;
   const nameTitle = isStandby
-    ? "En attente de paquets Albion Online… Si le jeu est déjà ouvert, changez de zone ou relancez votre session pour synchroniser vos données."
+    ? "En attente de paquets Albion Online… Si le jeu est déjà ouvert, changez de zone ou combattez un monstre pour synchroniser votre personnage."
     : displayName;
   const rawMap = String(lp.currentMapNameFr || "En attente…");
   const displayMap = rawMap.startsWith("En attente") ? "En attente…" : rawMap;
@@ -361,7 +397,7 @@ const renderHeader = () => {
   el("header-player-name").title = nameTitle;
   el("header-map-name").textContent = displayMap;
   el("header-map-name").title = displayMap;
-  el("header-silver").textContent = `${formatExactInt(lp.silver)} Silver`;
+  el("header-silver").textContent = `${formatExactInt(lp.silver || 0)} Silver`;
 };
 
 const renderSnapshotSelect = () => {

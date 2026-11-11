@@ -889,6 +889,9 @@ impl AnalyzerEngine {
                 premium_bonus_amount,
                 ..
             } => {
+                if self.local_player.object_id == 0 && user_object_id != 0 {
+                    self.adopt_local_object_id(user_object_id);
+                }
                 if self.is_local_object(user_object_id) {
                     self.handle_harvest(
                         item_id,
@@ -2959,5 +2962,23 @@ mod tests {
         assert_eq!(snap_combat.total_party_damage, 850);
         assert_eq!(snap_combat.meter_players.len(), 1);
         assert!(snap_combat.meter_players[0].is_self);
+
+        // Harvesting without prior JoinResponse adopts local character
+        let mut harvest_engine =
+            AnalyzerEngine::new(Catalog::from_json_str(EMBEDDED).unwrap(), 5_000);
+        assert_eq!(harvest_engine.local_player.object_id, 0);
+        harvest_engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::HarvestFinished {
+                user_object_id: 5555,
+                harvest_object_id: 9999,
+                item_id: 4011, // Meteorite Ore T7.2
+                standard_amount: 3,
+                collector_bonus_amount: 0,
+                premium_bonus_amount: 1,
+            },
+            5_050,
+        );
+        assert_eq!(harvest_engine.local_player.object_id, 5555);
+        assert_eq!(harvest_engine.snapshot(5_100).gathering_totals.ore, 4);
     }
 }

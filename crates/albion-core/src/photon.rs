@@ -95,7 +95,7 @@ pub fn looks_like_photon(payload: &[u8]) -> bool {
 
 #[inline]
 pub fn is_photon_port(port: u16) -> bool {
-    PHOTON_UDP_PORTS.contains(&port)
+    PHOTON_UDP_PORTS.contains(&port) || (5055..=5060).contains(&port) || (4530..=4540).contains(&port)
 }
 
 /// Extracts the UDP ports and payload from a raw IPv4 or IPv6 packet (as delivered by `SIO_RCVALL`).
