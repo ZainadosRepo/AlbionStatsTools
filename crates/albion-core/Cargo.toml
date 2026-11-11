@@ -1,6 +1,6 @@
 [package]
 name = "albion-core"
-version = "0.6.1"
+version = "0.6.2"
 description = "Photon UDP + Protocol16 parser, combat damage/heal meter, and session telemetry engine for Albion Online"
 authors = ["ZainadosRepo"]
 edition = "2021"
