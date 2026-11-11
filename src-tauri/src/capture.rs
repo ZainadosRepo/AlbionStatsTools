@@ -402,8 +402,13 @@ mod npcap {
     pub type FnFreeAllDevs = unsafe extern "system" fn(*mut PcapIf);
     pub type FnOpenLive =
         unsafe extern "system" fn(*const i8, i32, i32, i32, *mut i8) -> *mut core::ffi::c_void;
-    pub type FnCompile =
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut BpfProgram, *const i8, i32, u32) -> i32;
+    pub type FnCompile = unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut BpfProgram,
+        *const i8,
+        i32,
+        u32,
+    ) -> i32;
     pub type FnSetFilter =
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut BpfProgram) -> i32;
     pub type FnFreeCode = unsafe extern "system" fn(*mut BpfProgram);
@@ -548,9 +553,8 @@ fn start_npcap_capture(
         let dev = unsafe { &*curr };
         if !dev.name.is_null() && (dev.flags & PCAP_IF_LOOPBACK == 0) {
             let mut open_err = [0i8; 256];
-            let handle = unsafe {
-                (lib.pcap_open_live)(dev.name, 65_535, 1, 250, open_err.as_mut_ptr())
-            };
+            let handle =
+                unsafe { (lib.pcap_open_live)(dev.name, 65_535, 1, 250, open_err.as_mut_ptr()) };
             if !handle.is_null() {
                 let mut bpf = BpfProgram {
                     bf_len: 0,
@@ -658,10 +662,7 @@ fn npcap_worker_loop(
 }
 
 #[cfg(target_os = "windows")]
-fn windows_raw_supervisor(
-    engine: Arc<Mutex<AnalyzerEngine>>,
-    status: Arc<Mutex<CaptureStatus>>,
-) {
+fn windows_raw_supervisor(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mutex<CaptureStatus>>) {
     use std::collections::HashSet;
     use std::time::Duration;
 
