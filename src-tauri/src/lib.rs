@@ -112,6 +112,86 @@ fn reset_session(
 }
 
 #[tauri::command]
+fn clear_dungeons(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<FullStatusResponse, String> {
+    {
+        let mut eng = state
+            .engine
+            .lock()
+            .map_err(|_| "verrou moteur indisponible".to_string())?;
+        eng.clear_dungeons();
+        persist_history_best_effort(&app, &eng);
+    }
+    get_state(app, state)
+}
+
+#[tauri::command]
+fn clear_gathering(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<FullStatusResponse, String> {
+    {
+        let mut eng = state
+            .engine
+            .lock()
+            .map_err(|_| "verrou moteur indisponible".to_string())?;
+        eng.clear_gathering();
+        persist_history_best_effort(&app, &eng);
+    }
+    get_state(app, state)
+}
+
+#[tauri::command]
+fn clear_loot(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<FullStatusResponse, String> {
+    {
+        let mut eng = state
+            .engine
+            .lock()
+            .map_err(|_| "verrou moteur indisponible".to_string())?;
+        eng.clear_loot();
+        persist_history_best_effort(&app, &eng);
+    }
+    get_state(app, state)
+}
+
+#[tauri::command]
+fn clear_market_data(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<FullStatusResponse, String> {
+    {
+        let mut eng = state
+            .engine
+            .lock()
+            .map_err(|_| "verrou moteur indisponible".to_string())?;
+        eng.clear_market_data();
+    }
+    get_state(app, state)
+}
+
+#[tauri::command]
+fn clear_all_data(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<FullStatusResponse, String> {
+    let now = now_unix_ms();
+    {
+        let mut eng = state
+            .engine
+            .lock()
+            .map_err(|_| "verrou moteur indisponible".to_string())?;
+        eng.clear_all_history(now);
+        persist_history_best_effort(&app, &eng);
+    }
+    get_state(app, state)
+}
+
+#[tauri::command]
 fn take_snapshot(
     app: AppHandle,
     state: tauri::State<AppState>,
@@ -382,6 +462,11 @@ pub fn run() {
             simulate_session,
             reset_meter,
             reset_session,
+            clear_dungeons,
+            clear_gathering,
+            clear_loot,
+            clear_market_data,
+            clear_all_data,
             archive_session,
             delete_archived_session,
             take_snapshot,

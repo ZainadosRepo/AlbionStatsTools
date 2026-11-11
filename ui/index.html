@@ -296,7 +296,8 @@
             id="btn-simulate"
             class="btn btn-secondary btn-sm btn-nav-sim"
             type="button"
-            title="Injecter un scénario réseau Photon complet (combat 5v5, brumes, récolte, butin, marché)"
+            title="Injecter un scénario réseau Photon de test (combat 5v5, brumes, récolte, butin, marché)"
+            hidden
           >
             <svg class="ico"><use href="#ico-bolt"></use></svg>
             <span class="nav-action-label">Simuler</span>
@@ -475,8 +476,19 @@
         <section id="tab-dungeons" class="tab-panel">
           <div class="panel">
             <div class="panel-header">
-              <h2>Instances — Donjons, Brumes, Hellgates &amp; Corrompus</h2>
-              <span id="dungeon-count-badge" class="badge-subtle">0 instance</span>
+              <div class="panel-heading-group">
+                <h2>Instances — Donjons, Brumes, Hellgates &amp; Corrompus</h2>
+                <span id="dungeon-count-badge" class="badge-subtle">0 instance</span>
+              </div>
+              <button
+                id="btn-clear-dungeons"
+                class="btn btn-secondary btn-sm"
+                type="button"
+                title="Effacer tout l'historique des donjons et brumes"
+              >
+                <svg class="ico"><use href="#ico-trash"></use></svg>
+                <span>Vider</span>
+              </button>
             </div>
             <div id="dungeon-rows" class="table-wrap"></div>
           </div>
@@ -513,8 +525,19 @@
 
           <div class="panel">
             <div class="panel-header">
-              <h2>Journal de Récolte</h2>
-              <span id="gathering-summary-badge" class="badge-subtle">0 ressource • 0 Silver estimés</span>
+              <div class="panel-heading-group">
+                <h2>Journal de Récolte</h2>
+                <span id="gathering-summary-badge" class="badge-subtle">0 ressource • 0 Silver estimés</span>
+              </div>
+              <button
+                id="btn-clear-gathering"
+                class="btn btn-secondary btn-sm"
+                type="button"
+                title="Effacer tous les totaux et le journal de récolte"
+              >
+                <svg class="ico"><use href="#ico-trash"></use></svg>
+                <span>Vider</span>
+              </button>
             </div>
             <div id="gathering-rows" class="table-wrap"></div>
           </div>
@@ -534,10 +557,21 @@
             <div class="panel">
               <div class="panel-header">
                 <h2>Journal de Butin</h2>
-                <button id="btn-export-csv" class="btn btn-secondary btn-sm" type="button">
-                  <svg class="ico"><use href="#ico-download"></use></svg>
-                  <span>Exporter CSV</span>
-                </button>
+                <div class="header-actions">
+                  <button id="btn-export-csv" class="btn btn-secondary btn-sm" type="button">
+                    <svg class="ico"><use href="#ico-download"></use></svg>
+                    <span>Exporter CSV</span>
+                  </button>
+                  <button
+                    id="btn-clear-loot"
+                    class="btn btn-secondary btn-sm"
+                    type="button"
+                    title="Effacer tout le journal de butin"
+                  >
+                    <svg class="ico"><use href="#ico-trash"></use></svg>
+                    <span>Vider</span>
+                  </button>
+                </div>
               </div>
               <div id="loot-rows" class="table-wrap"></div>
             </div>
@@ -711,14 +745,34 @@
                   <svg class="ico"><use href="#ico-loot"></use></svg>
                   <span>Valoriser session</span>
                 </button>
+                <button
+                  id="btn-clear-tracked"
+                  class="btn btn-secondary"
+                  type="button"
+                  title="Supprimer tous les objets suivis du tableau de cotations"
+                >
+                  <svg class="ico"><use href="#ico-trash"></use></svg>
+                  <span>Désuivre tout</span>
+                </button>
               </div>
 
               <div id="session-valuation-banner" class="valuation-banner" hidden></div>
               <div id="api-price-rows" class="table-wrap"></div>
 
               <div class="panel-subheader">
-                <h3 class="sub-heading">Ordres &amp; Courriers Capturés en Jeu</h3>
-                <span id="market-orders-badge" class="badge-subtle">0 capture</span>
+                <div class="panel-heading-group">
+                  <h3 class="sub-heading">Ordres &amp; Courriers Capturés en Jeu</h3>
+                  <span id="market-orders-badge" class="badge-subtle">0 capture</span>
+                </div>
+                <button
+                  id="btn-clear-market"
+                  class="btn btn-secondary btn-sm"
+                  type="button"
+                  title="Effacer tous les ordres de marché et courriers capturés"
+                >
+                  <svg class="ico"><use href="#ico-trash"></use></svg>
+                  <span>Vider</span>
+                </button>
               </div>
               <div id="captured-market-rows" class="table-wrap"></div>
             </div>

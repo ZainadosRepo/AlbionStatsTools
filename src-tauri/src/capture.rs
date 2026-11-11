@@ -43,17 +43,66 @@ pub fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(target_os = "windows")]
+fn enumerate_windows_adapter_ips(out: &mut Vec<Ipv4Addr>) {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct MibIpAddrRow {
+        dw_addr: u32,
+        dw_index: u32,
+        dw_mask: u32,
+        dw_bcast_addr: u32,
+        dw_reasm_size: u32,
+        unused1: u16,
+        w_type: u16,
+    }
+
+    #[link(name = "iphlpapi")]
+    extern "system" {
+        fn GetIpAddrTable(p_ip_addr_table: *mut u8, pdw_size: *mut u32, b_order: i32) -> u32;
+    }
+
+    let mut size: u32 = 0;
+    unsafe {
+        let _ = GetIpAddrTable(core::ptr::null_mut(), &mut size, 0);
+        if size > 0 && size <= 65_536 {
+            let mut buf = vec![0u8; size as usize];
+            if GetIpAddrTable(buf.as_mut_ptr(), &mut size, 0) == 0 && buf.len() >= 4 {
+                let num_entries = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+                let row_size = core::mem::size_of::<MibIpAddrRow>();
+                for i in 0..num_entries {
+                    let offset = 4 + i * row_size;
+                    if offset + row_size > buf.len() {
+                        break;
+                    }
+                    let row = *(buf.as_ptr().add(offset) as *const MibIpAddrRow);
+                    let ip = Ipv4Addr::from(u32::from_be(row.dw_addr));
+                    if !ip.is_loopback() && !ip.is_unspecified() && !ip.is_link_local() && !out.contains(&ip) {
+                        out.push(ip);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Discovers all candidate outbound IPv4 addresses used to reach Albion Online servers
-/// (Europe, Americas, Asia) as well as the default WAN gateway, supporting split-tunnel VPNs.
+/// (Europe, Americas, Asia) as well as all active physical, Wi-Fi, and VPN network adapters.
 #[cfg(any(target_os = "windows", test))]
 pub fn detect_candidate_ipv4s() -> Vec<Ipv4Addr> {
-    const ROUTE_PROBES: [&str; 4] = [
-        "193.169.238.1:5056",
-        "5.45.187.1:5056",
-        "5.188.125.1:5056",
+    const ROUTE_PROBES: [&str; 6] = [
+        "193.169.238.1:5056", // Europe (Amsterdam)
+        "193.169.239.1:5056",
+        "5.45.187.1:5056",    // Americas (Washington)
+        "5.188.125.1:5056",   // Asia (Singapore)
         "1.1.1.1:53",
+        "8.8.8.8:53",
     ];
     let mut out = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        enumerate_windows_adapter_ips(&mut out);
+    }
     for target in ROUTE_PROBES {
         let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else {
             continue;
@@ -63,7 +112,7 @@ pub fn detect_candidate_ipv4s() -> Vec<Ipv4Addr> {
         }
         if let Ok(addr) = sock.local_addr() {
             if let IpAddr::V4(ip) = addr.ip() {
-                if !ip.is_loopback() && !ip.is_unspecified() && !out.contains(&ip) {
+                if !ip.is_loopback() && !ip.is_unspecified() && !ip.is_link_local() && !out.contains(&ip) {
                     out.push(ip);
                 }
             }

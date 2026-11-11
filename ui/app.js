@@ -350,11 +350,15 @@ const renderHeader = () => {
   const lp = snap.localPlayer;
   const guildTag = lp.guildName ? ` [${lp.guildName}]` : "";
   const rawName = String(lp.username || "En attente…");
-  const displayName = rawName.startsWith("En attente") ? "En attente…" : `${rawName}${guildTag}`;
+  const isStandby = rawName.startsWith("En attente");
+  const displayName = isStandby ? "En attente…" : `${rawName}${guildTag}`;
+  const nameTitle = isStandby
+    ? "En attente de paquets Albion Online… Si le jeu est déjà ouvert, changez de zone ou relancez votre session pour synchroniser vos données."
+    : displayName;
   const rawMap = String(lp.currentMapNameFr || "En attente…");
   const displayMap = rawMap.startsWith("En attente") ? "En attente…" : rawMap;
   el("header-player-name").textContent = displayName;
-  el("header-player-name").title = displayName;
+  el("header-player-name").title = nameTitle;
   el("header-map-name").textContent = displayMap;
   el("header-map-name").title = displayMap;
   el("header-silver").textContent = `${formatExactInt(lp.silver)} Silver`;
@@ -1737,8 +1741,56 @@ const initEvents = () => {
       latestState = res;
       lastStateSignature = computeStateSignature(res);
       renderAll();
-      showToast("Compteurs de session réinitialisés.");
+      showToast("Session réinitialisée (Fame, Silver, Donjons, Récolte et Butin remis à zéro).");
     }
+  });
+
+  el("btn-clear-dungeons")?.addEventListener("click", async () => {
+    const res = await invokeCmd("clear_dungeons");
+    if (res) {
+      latestState = res;
+      renderAll();
+      showToast("Historique des donjons et brumes effacé.");
+    }
+  });
+
+  el("btn-clear-gathering")?.addEventListener("click", async () => {
+    const res = await invokeCmd("clear_gathering");
+    if (res) {
+      latestState = res;
+      renderAll();
+      showToast("Journal et totaux de récolte effacés.");
+    }
+  });
+
+  el("btn-clear-loot")?.addEventListener("click", async () => {
+    const res = await invokeCmd("clear_loot");
+    if (res) {
+      latestState = res;
+      renderAll();
+      showToast("Journal de butin effacé.");
+    }
+  });
+
+  el("btn-clear-market")?.addEventListener("click", async () => {
+    const res = await invokeCmd("clear_market_data");
+    if (res) {
+      latestState = res;
+      renderAll();
+      showToast("Ordres de marché et courriers capturés effacés.");
+    }
+  });
+
+  el("btn-clear-tracked")?.addEventListener("click", async () => {
+    if (!settings.trackedItems || settings.trackedItems.length === 0) {
+      showToast("Aucun objet suivi à effacer.");
+      return;
+    }
+    settings.trackedItems = [];
+    lastPriceRows = [];
+    await persistSettings();
+    renderMarketPrices();
+    showToast("Tous les objets suivis ont été retirés.");
   });
 
   el("btn-export-csv")?.addEventListener("click", async () => {

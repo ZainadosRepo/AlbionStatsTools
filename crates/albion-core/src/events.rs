@@ -380,7 +380,9 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
         return None;
     }
     let p = &ev.parameters;
-    let event_code = p.get_i16(252)?;
+    let event_code = p
+        .get_i16(252)
+        .or_else(|| (ev.code != 0).then_some(ev.code as i16))?;
 
     match event_code {
         EV_LEAVE => Some(AlbionTelemetryEvent::Leave {
@@ -614,7 +616,9 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
 
 fn decode_operation_request(req: &OperationRequestPayload) -> Option<AlbionTelemetryEvent> {
     let p = &req.parameters;
-    let op_code = p.get_i16(253)?;
+    let op_code = p
+        .get_i16(253)
+        .or_else(|| (req.operation_code != 0).then_some(req.operation_code as i16))?;
     match op_code {
         OP_REPAIR_EQUIPMENT_ITEM => Some(AlbionTelemetryEvent::RepairEquipmentRequest {
             slot_id: p.get_i32(0).unwrap_or(0),
@@ -626,7 +630,9 @@ fn decode_operation_request(req: &OperationRequestPayload) -> Option<AlbionTelem
 
 fn decode_operation_response(resp: &OperationResponsePayload) -> Option<AlbionTelemetryEvent> {
     let p = &resp.parameters;
-    let op_code = p.get_i16(253)?;
+    let op_code = p
+        .get_i16(253)
+        .or_else(|| (resp.operation_code != 0).then_some(resp.operation_code as i16))?;
     match op_code {
         OP_JOIN => {
             let user_object_id = p.get_i64(0)?;

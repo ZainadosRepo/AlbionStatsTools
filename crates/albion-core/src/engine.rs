@@ -597,6 +597,14 @@ impl AnalyzerEngine {
                 equipment,
             } => {
                 self.guid_to_object_id.insert(guid, object_id);
+                if self.local_player.object_id == object_id {
+                    if !name.is_empty() {
+                        self.local_player.username = name.clone();
+                    }
+                    if !guild_name.is_empty() {
+                        self.local_player.guild_name = guild_name.clone();
+                    }
+                }
                 let is_party = self.party_guids.contains_key(&guid)
                     || object_id == self.local_player.object_id;
                 let is_self = object_id == self.local_player.object_id;
@@ -706,6 +714,9 @@ impl AnalyzerEngine {
                 in_active_combat,
                 in_passive_combat,
             } => {
+                if self.local_player.object_id == 0 && object_id != 0 {
+                    self.adopt_local_object_id(object_id);
+                }
                 if object_id == self.local_player.object_id {
                     let was_in_combat = self.local_player.in_combat;
                     let now_in_combat = in_active_combat || in_passive_combat;
@@ -730,6 +741,9 @@ impl AnalyzerEngine {
                 satchel_fame,
                 ..
             } => {
+                if self.local_player.object_id == 0 && object_id != 0 {
+                    self.adopt_local_object_id(object_id);
+                }
                 if self.is_local_object(object_id) {
                     let gained = fame_with_zone_multiplier.as_f64().max(0.0);
                     self.session.fame += gained;
@@ -747,6 +761,9 @@ impl AnalyzerEngine {
                 cluster_tax,
                 ..
             } => {
+                if self.local_player.object_id == 0 && object_id != 0 {
+                    self.adopt_local_object_id(object_id);
+                }
                 if self.is_local_object(object_id) {
                     let pre = yield_pre_tax.as_f64().max(0.0);
                     let g_tax = guild_tax.as_f64().max(0.0);
@@ -764,6 +781,9 @@ impl AnalyzerEngine {
                 object_id,
                 current_player_silver,
             } => {
+                if self.local_player.object_id == 0 && object_id != 0 {
+                    self.adopt_local_object_id(object_id);
+                }
                 if self.is_local_object(object_id) {
                     self.local_player.silver = current_player_silver.as_f64();
                 }
@@ -965,6 +985,29 @@ impl AnalyzerEngine {
         }
     }
 
+    fn adopt_local_object_id(&mut self, object_id: i64) {
+        if object_id == 0 {
+            return;
+        }
+        self.local_player.object_id = object_id;
+        let (name_to_adopt, guild_to_adopt) = {
+            let ent = self.ensure_entity(object_id);
+            ent.is_self = true;
+            ent.is_party = true;
+            if !ent.name.is_empty() && !ent.name.starts_with("Joueur #") {
+                (Some(ent.name.clone()), Some(ent.guild_name.clone()))
+            } else {
+                (None, None)
+            }
+        };
+        if let (Some(name), Some(guild)) = (name_to_adopt, guild_to_adopt) {
+            self.local_player.username = name;
+            self.local_player.guild_name = guild;
+        } else if self.local_player.username.starts_with("En attente") {
+            self.local_player.username = format!("Joueur #{object_id}");
+        }
+    }
+
     #[inline]
     fn is_local_object(&self, object_id: i64) -> bool {
         self.local_player.object_id == 0
@@ -1052,7 +1095,7 @@ impl AnalyzerEngine {
         self.last_player_health
             .insert(tick.affected_object_id, tick.new_health_value);
 
-        let causer_in_party = self
+        let mut causer_in_party = self
             .entities
             .get(&tick.causer_id)
             .map(|e| e.is_party || e.is_self)
@@ -1064,7 +1107,12 @@ impl AnalyzerEngine {
             .unwrap_or(false);
 
         if !causer_in_party && !affected_in_party {
-            return;
+            if self.local_player.object_id == 0 && tick.causer_id != 0 && self.party_guids.is_empty() {
+                self.adopt_local_object_id(tick.causer_id);
+                causer_in_party = true;
+            } else {
+                return;
+            }
         }
 
         self.combat_start_ms = Some(self.combat_start_ms.map_or(now_ms, |s| s.min(now_ms)));
@@ -1460,8 +1508,8 @@ impl AnalyzerEngine {
         }
     }
 
-    /// Resets session counters (Fame, Silver, ReSpec, Might, Favor, Factions, Kills/Deaths).
-    pub fn reset_session(&mut self, now_ms: u64) {
+    /// Resets live session counters (Fame, Silver, ReSpec, Might, Favor, Factions, Kills/Deaths).
+    pub fn reset_session_counters(&mut self, now_ms: u64) {
         self.session_start_ms = now_ms;
         self.last_now_ms = now_ms;
         self.session = SessionStats {
@@ -1490,6 +1538,54 @@ impl AnalyzerEngine {
         for val in self.faction_map.values_mut() {
             *val = (0.0, 0.0, 0.0);
         }
+    }
+
+    /// Resets session counters and purges live instances, gathering log, and loot history.
+    pub fn reset_session(&mut self, now_ms: u64) {
+        self.reset_session_counters(now_ms);
+        self.dungeons.clear();
+        self.gathering_totals = GatheringTotals::default();
+        self.gathering_log.clear();
+        self.loot_log.clear();
+        self.market_orders.clear();
+        self.mail_notifications.clear();
+        self.trades.clear();
+        self.dirty_history = true;
+    }
+
+    /// Clears all recorded dungeon, mist, and corrupted runs.
+    pub fn clear_dungeons(&mut self) {
+        self.dungeons.clear();
+        self.dirty_history = true;
+    }
+
+    /// Clears the gathering totals and harvest event log.
+    pub fn clear_gathering(&mut self) {
+        self.gathering_totals = GatheringTotals::default();
+        self.gathering_log.clear();
+        self.dirty_history = true;
+    }
+
+    /// Clears the party loot history log.
+    pub fn clear_loot(&mut self) {
+        self.loot_log.clear();
+        self.dirty_history = true;
+    }
+
+    /// Clears captured market orders, mail, and trade transactions.
+    pub fn clear_market_data(&mut self) {
+        self.market_orders.clear();
+        self.mail_notifications.clear();
+        self.trades.clear();
+    }
+
+    /// Purges all session data, combat meter, snapshots, instances, and history.
+    pub fn clear_all_history(&mut self, now_ms: u64) {
+        self.reset_meter();
+        self.reset_session(now_ms);
+        self.snapshots.clear();
+        self.archived_sessions.clear();
+        self.dirty_history = true;
     }
 
     /// Automatically archives a snapshot when exiting a meaningful fight (>= 500 output)
@@ -1613,7 +1709,7 @@ impl AnalyzerEngine {
         if self.archived_sessions.len() > MAX_ARCHIVED_SESSIONS {
             self.archived_sessions.truncate(MAX_ARCHIVED_SESSIONS);
         }
-        self.reset_session(ended_at_ms);
+        self.reset_session_counters(ended_at_ms);
         self.dirty_history = true;
         Some(archived)
     }
@@ -2732,5 +2828,72 @@ mod tests {
             4_500,
         );
         assert_eq!(engine.snapshot(4_600).inspected_players.len(), 1);
+    }
+
+    #[test]
+    fn purges_mock_and_session_data_and_infers_mid_session_character() {
+        let catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let mut engine = AnalyzerEngine::new(catalog, 1_000);
+
+        // 1. Ingest simulation scenario (which generates Aurelia, dungeons, harvest, loot)
+        engine.run_wire_simulation_scenario(1_000);
+        let snap = engine.snapshot(2_000);
+        assert!(!snap.dungeons.is_empty());
+        assert!(!snap.gathering_log.is_empty());
+        assert!(!snap.loot_log.is_empty());
+        assert!(snap.session.fame > 0.0);
+
+        // 2. Individual clear operations
+        engine.clear_dungeons();
+        assert!(engine.snapshot(2_100).dungeons.is_empty());
+
+        engine.clear_gathering();
+        let snap_g = engine.snapshot(2_200);
+        assert!(snap_g.gathering_log.is_empty());
+        assert_eq!(snap_g.gathering_totals.total_nodes, 0);
+
+        engine.clear_loot();
+        assert!(engine.snapshot(2_300).loot_log.is_empty());
+
+        // 3. Clear all history completely
+        engine.clear_all_history(3_000);
+        let snap_empty = engine.snapshot(3_100);
+        assert_eq!(snap_empty.session.fame, 0.0);
+        assert_eq!(snap_empty.session.silver, 0.0);
+        assert!(snap_empty.dungeons.is_empty());
+        assert!(snap_empty.gathering_log.is_empty());
+        assert!(snap_empty.loot_log.is_empty());
+
+        // 4. Mid-session character adoption without JoinResponse
+        let mut fresh = AnalyzerEngine::new(Catalog::from_json_str(EMBEDDED).unwrap(), 4_000);
+        assert_eq!(fresh.local_player.object_id, 0);
+        fresh.ingest_telemetry_event(
+            AlbionTelemetryEvent::InCombatStateUpdate {
+                object_id: 4242,
+                in_active_combat: true,
+                in_passive_combat: false,
+            },
+            4_000,
+        );
+        assert_eq!(fresh.local_player.object_id, 4242);
+
+        // Combat tick from adopted causer is recorded
+        fresh.ingest_telemetry_event(
+            AlbionTelemetryEvent::HealthUpdate(HealthTick {
+                affected_object_id: 8888,
+                timestamp: 4_050,
+                health_change: -850.0,
+                new_health_value: 2_000.0,
+                effect_type: EffectType::Physical,
+                effect_origin: EffectOrigin::Direct,
+                causer_id: 4242,
+                causing_spell_index: 2404,
+            }),
+            4_050,
+        );
+        let snap_combat = fresh.snapshot(4_100);
+        assert_eq!(snap_combat.total_party_damage, 850);
+        assert_eq!(snap_combat.meter_players.len(), 1);
+        assert!(snap_combat.meter_players[0].is_self);
     }
 }

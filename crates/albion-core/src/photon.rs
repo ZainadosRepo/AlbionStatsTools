@@ -50,7 +50,7 @@ pub struct UdpDatagramSlice<'a> {
 }
 
 /// Fast heuristic check (`len >= 3 && b[0] in {241, 242, 254}`)
-/// or standard Photon peer headers with a sane `commandCount`.
+/// or standard Photon peer headers with a verified command header.
 #[inline]
 pub fn looks_like_photon(payload: &[u8]) -> bool {
     if payload.len() < 3 {
@@ -62,8 +62,33 @@ pub fn looks_like_photon(payload: &[u8]) -> bool {
     if payload.len() >= PHOTON_HEADER_LEN {
         let flags = payload[2];
         let cmd_count = payload[3];
-        return (flags == 0 || flags == FLAG_CRC || flags == FLAG_ENCRYPTED)
-            && (1..=64).contains(&cmd_count);
+        if !(flags == 0 || flags == FLAG_CRC || flags == FLAG_ENCRYPTED)
+            || !(1..=64).contains(&cmd_count)
+        {
+            return false;
+        }
+        let offset = if flags == FLAG_CRC {
+            PHOTON_HEADER_LEN + 4
+        } else {
+            PHOTON_HEADER_LEN
+        };
+        if payload.len() < offset + COMMAND_HEADER_LEN {
+            return false;
+        }
+        let cmd_type = payload[offset];
+        if !(1..=12).contains(&cmd_type) {
+            return false;
+        }
+        let cmd_len = i32::from_be_bytes([
+            payload[offset + 4],
+            payload[offset + 5],
+            payload[offset + 6],
+            payload[offset + 7],
+        ]);
+        if cmd_len < COMMAND_HEADER_LEN as i32 || (cmd_len as usize) > (payload.len() - offset) {
+            return false;
+        }
+        return true;
     }
     false
 }
@@ -231,7 +256,10 @@ impl PhotonParser {
             offset += 4;
         }
 
-        self.packets_processed += 1;
+        let mut counted_packet = flags == FLAG_CRC || command_count == 0;
+        if counted_packet {
+            self.packets_processed += 1;
+        }
 
         for _ in 0..command_count {
             if offset + COMMAND_HEADER_LEN > payload.len() {
@@ -256,6 +284,10 @@ impl PhotonParser {
 
             if command_length < COMMAND_HEADER_LEN as i32 {
                 break;
+            }
+            if !counted_packet {
+                self.packets_processed += 1;
+                counted_packet = true;
             }
             let cmd_len = command_length as usize;
             let Some(cmd_end) = offset.checked_add(cmd_len) else {
