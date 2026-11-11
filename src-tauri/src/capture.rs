@@ -4,7 +4,6 @@
 //! - All platforms: local loopback relay listener on `127.0.0.1:50560` + built-in wire simulator.
 
 use albion_core::engine::AnalyzerEngine;
-#[cfg(any(target_os = "macos", test))]
 use albion_core::photon::UdpDatagramSlice;
 use albion_core::photon::{extract_udp_from_ip_packet, is_photon_port, looks_like_photon};
 use serde::{Deserialize, Serialize};
@@ -159,8 +158,19 @@ pub fn parse_tcpdump_hex_line(line: &str, out: &mut Vec<u8>) -> bool {
     true
 }
 
-/// Scans a link-layer frame (Ethernet / BSD loopback / PKTAP) for an IPv4/IPv6 Photon UDP packet.
-#[cfg(any(target_os = "macos", test))]
+/// Returns true if a Winsock error code is a transient condition that should not
+/// terminate the raw socket capture loop.
+#[inline]
+pub fn is_transient_winsock_error(err: i32) -> bool {
+    // 10054: WSAECONNRESET (ICMP port unreachable delivered to UDP raw socket)
+    // 10040: WSAEMSGSIZE (datagram exceeded receive buffer)
+    // 10035: WSAEWOULDBLOCK (non-blocking call would block)
+    // 10060: WSAETIMEDOUT (socket timed out)
+    // 10004: WSAEINTR (interrupted system call)
+    matches!(err, 10054 | 10040 | 10035 | 10060 | 10004)
+}
+
+/// Scans a link-layer frame (Ethernet / BSD loopback / PKTAP / Npcap) for an IPv4/IPv6 Photon UDP packet.
 pub fn find_ipv4_udp_in_frame(frame: &[u8]) -> Option<UdpDatagramSlice<'_>> {
     let max_offset = frame.len().min(64);
     for offset in 0..max_offset {
@@ -359,7 +369,296 @@ fn macos_bpf_capture_loop(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mutex<
 }
 
 #[cfg(target_os = "windows")]
+mod npcap {
+    use super::*;
+    use std::sync::Arc;
+
+    #[repr(C)]
+    pub struct PcapIf {
+        pub next: *mut PcapIf,
+        pub name: *const i8,
+        pub description: *const i8,
+        pub addresses: *mut core::ffi::c_void,
+        pub flags: u32,
+    }
+
+    #[repr(C)]
+    pub struct BpfProgram {
+        pub bf_len: u32,
+        pub bf_insns: *mut core::ffi::c_void,
+    }
+
+    #[repr(C)]
+    pub struct PcapPkthdr {
+        pub ts_sec: i32,
+        pub ts_usec: i32,
+        pub caplen: u32,
+        pub len: u32,
+    }
+
+    pub const PCAP_IF_LOOPBACK: u32 = 0x00000001;
+
+    pub type FnFindAllDevs = unsafe extern "system" fn(*mut *mut PcapIf, *mut i8) -> i32;
+    pub type FnFreeAllDevs = unsafe extern "system" fn(*mut PcapIf);
+    pub type FnOpenLive =
+        unsafe extern "system" fn(*const i8, i32, i32, i32, *mut i8) -> *mut core::ffi::c_void;
+    pub type FnCompile =
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut BpfProgram, *const i8, i32, u32) -> i32;
+    pub type FnSetFilter =
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut BpfProgram) -> i32;
+    pub type FnFreeCode = unsafe extern "system" fn(*mut BpfProgram);
+    pub type FnNextEx = unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut PcapPkthdr,
+        *mut *const u8,
+    ) -> i32;
+    pub type FnClose = unsafe extern "system" fn(*mut core::ffi::c_void);
+
+    pub struct NpcapLib {
+        pub _handle: usize,
+        pub pcap_findalldevs: FnFindAllDevs,
+        pub pcap_freealldevs: FnFreeAllDevs,
+        pub pcap_open_live: FnOpenLive,
+        pub pcap_compile: FnCompile,
+        pub pcap_setfilter: FnSetFilter,
+        pub pcap_freecode: FnFreeCode,
+        pub pcap_next_ex: FnNextEx,
+        pub pcap_close: FnClose,
+    }
+
+    unsafe impl Send for NpcapLib {}
+    unsafe impl Sync for NpcapLib {}
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LoadLibraryA(lpLibFileName: *const i8) -> usize;
+        fn GetProcAddress(hModule: usize, lpProcName: *const i8) -> *const core::ffi::c_void;
+        fn SetDllDirectoryA(lpPathName: *const i8) -> i32;
+    }
+
+    pub fn try_load_npcap() -> Option<Arc<NpcapLib>> {
+        unsafe {
+            let _ = SetDllDirectoryA(b"C:\\Windows\\System32\\Npcap\0".as_ptr() as *const i8);
+        }
+
+        let candidates = [
+            b"wpcap.dll\0".as_ptr() as *const i8,
+            b"C:\\Windows\\System32\\Npcap\\wpcap.dll\0".as_ptr() as *const i8,
+            b"C:\\Windows\\SysWOW64\\Npcap\\wpcap.dll\0".as_ptr() as *const i8,
+        ];
+
+        let mut h = 0;
+        for path in candidates {
+            h = unsafe { LoadLibraryA(path) };
+            if h != 0 {
+                break;
+            }
+        }
+
+        if h == 0 {
+            return None;
+        }
+
+        unsafe {
+            macro_rules! resolve {
+                ($sym:literal, $ty:ty) => {{
+                    let ptr = GetProcAddress(h, concat!($sym, "\0").as_ptr() as *const i8);
+                    if ptr.is_null() {
+                        return None;
+                    }
+                    core::mem::transmute::<*const core::ffi::c_void, $ty>(ptr)
+                }};
+            }
+
+            let pcap_findalldevs = resolve!("pcap_findalldevs", FnFindAllDevs);
+            let pcap_freealldevs = resolve!("pcap_freealldevs", FnFreeAllDevs);
+            let pcap_open_live = resolve!("pcap_open_live", FnOpenLive);
+            let pcap_compile = resolve!("pcap_compile", FnCompile);
+            let pcap_setfilter = resolve!("pcap_setfilter", FnSetFilter);
+            let pcap_freecode = resolve!("pcap_freecode", FnFreeCode);
+            let pcap_next_ex = resolve!("pcap_next_ex", FnNextEx);
+            let pcap_close = resolve!("pcap_close", FnClose);
+
+            Some(Arc::new(NpcapLib {
+                _handle: h,
+                pcap_findalldevs,
+                pcap_freealldevs,
+                pcap_open_live,
+                pcap_compile,
+                pcap_setfilter,
+                pcap_freecode,
+                pcap_next_ex,
+                pcap_close,
+            }))
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn windows_capture_supervisor(
+    engine: Arc<Mutex<AnalyzerEngine>>,
+    status: Arc<Mutex<CaptureStatus>>,
+) {
+    // 1. Try native Npcap (NDIS kernel capture driver) first.
+    // Npcap bypasses Windows Filtering Platform (WFP) and captures inbound UDP without raw socket restrictions.
+    if let Some(lib) = npcap::try_load_npcap() {
+        if start_npcap_capture(Arc::clone(&lib), Arc::clone(&engine), Arc::clone(&status)) {
+            // Npcap capture threads are running across all active physical/virtual network adapters.
+            // Supervisor remains idle to avoid duplicate packets.
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            }
+        }
+    }
+
+    // 2. Fall back to multi-interface raw sockets (`SIO_RCVALL`) with transient error suppression.
+    windows_raw_supervisor(engine, status);
+}
+
+#[cfg(target_os = "windows")]
+fn start_npcap_capture(
+    lib: Arc<npcap::NpcapLib>,
+    engine: Arc<Mutex<AnalyzerEngine>>,
+    status: Arc<Mutex<CaptureStatus>>,
+) -> bool {
+    use npcap::{BpfProgram, PcapIf, PCAP_IF_LOOPBACK};
+    use std::ffi::CStr;
+
+    let mut alldevs: *mut PcapIf = core::ptr::null_mut();
+    let mut errbuf = [0i8; 256];
+    let res = unsafe { (lib.pcap_findalldevs)(&mut alldevs, errbuf.as_mut_ptr()) };
+
+    if res != 0 || alldevs.is_null() {
+        let err_str = unsafe { CStr::from_ptr(errbuf.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
+        if let Ok(mut st) = status.lock() {
+            st.detail = format!(
+                "Npcap détecté mais énumération impossible ({err_str}) — passage en mode raw socket"
+            );
+        }
+        return false;
+    }
+
+    let bpf_expr = b"udp and (portrange 5055-5060 or portrange 4530-4540)\0";
+    let mut opened_count = 0usize;
+    let mut curr = alldevs;
+
+    while !curr.is_null() {
+        let dev = unsafe { &*curr };
+        if !dev.name.is_null() && (dev.flags & PCAP_IF_LOOPBACK == 0) {
+            let mut open_err = [0i8; 256];
+            let handle = unsafe {
+                (lib.pcap_open_live)(dev.name, 65_535, 1, 250, open_err.as_mut_ptr())
+            };
+            if !handle.is_null() {
+                let mut bpf = BpfProgram {
+                    bf_len: 0,
+                    bf_insns: core::ptr::null_mut(),
+                };
+                let comp_res = unsafe {
+                    (lib.pcap_compile)(handle, &mut bpf, bpf_expr.as_ptr() as *const i8, 1, 0)
+                };
+                if comp_res == 0 {
+                    let set_res = unsafe { (lib.pcap_setfilter)(handle, &mut bpf) };
+                    unsafe { (lib.pcap_freecode)(&mut bpf) };
+                    if set_res == 0 {
+                        opened_count += 1;
+                        let lib_clone = Arc::clone(&lib);
+                        let eng_clone = Arc::clone(&engine);
+                        let st_clone = Arc::clone(&status);
+                        std::thread::Builder::new()
+                            .name("photon-npcap-worker".into())
+                            .spawn(move || {
+                                npcap_worker_loop(handle, lib_clone, eng_clone, st_clone);
+                            })
+                            .ok();
+                    } else {
+                        unsafe { (lib.pcap_close)(handle) };
+                    }
+                } else {
+                    unsafe { (lib.pcap_close)(handle) };
+                }
+            }
+        }
+        curr = dev.next;
+    }
+
+    unsafe { (lib.pcap_freealldevs)(alldevs) };
+
+    if opened_count > 0 {
+        if let Ok(mut st) = status.lock() {
+            st.mode = "npcap".into();
+            st.bind_address = format!("{opened_count} carte(s) Npcap");
+            st.detail = format!(
+                "Capture matérielle Npcap NDIS active sur {opened_count} interface(s) (UDP 5055-5060/4530-4540)"
+            );
+            st.needs_elevation = false;
+        }
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn npcap_worker_loop(
+    handle: *mut core::ffi::c_void,
+    lib: Arc<npcap::NpcapLib>,
+    engine: Arc<Mutex<AnalyzerEngine>>,
+    status: Arc<Mutex<CaptureStatus>>,
+) {
+    use npcap::PcapPkthdr;
+
+    let mut header_ptr: *mut PcapPkthdr = core::ptr::null_mut();
+    let mut data_ptr: *const u8 = core::ptr::null();
+
+    loop {
+        let res = unsafe { (lib.pcap_next_ex)(handle, &mut header_ptr, &mut data_ptr) };
+        if res == 0 {
+            continue;
+        }
+        if res < 0 {
+            break;
+        }
+        if header_ptr.is_null() || data_ptr.is_null() {
+            continue;
+        }
+
+        let caplen = unsafe {
+            let primary = (*header_ptr).caplen as usize;
+            if primary > 0 && primary <= 65_535 {
+                primary
+            } else {
+                let alt = *((header_ptr as *const u8).add(16) as *const u32) as usize;
+                if alt > 0 && alt <= 65_535 {
+                    alt
+                } else {
+                    0
+                }
+            }
+        };
+
+        if caplen == 0 {
+            continue;
+        }
+
+        let frame = unsafe { core::slice::from_raw_parts(data_ptr, caplen) };
+        if let Some(udp) = find_ipv4_udp_in_frame(frame) {
+            if let Ok(mut st) = status.lock() {
+                st.raw_datagrams_seen += 1;
+            }
+            if let Ok(mut eng) = engine.lock() {
+                eng.ingest_udp_payload(udp.payload, now_unix_ms());
+            }
+        }
+    }
+
+    unsafe { (lib.pcap_close)(handle) };
+}
+
+#[cfg(target_os = "windows")]
+fn windows_raw_supervisor(
     engine: Arc<Mutex<AnalyzerEngine>>,
     status: Arc<Mutex<CaptureStatus>>,
 ) {
@@ -374,11 +673,13 @@ fn windows_capture_supervisor(
             if let Ok(active) = active_ips.lock() {
                 if active.is_empty() {
                     if let Ok(mut st) = status.lock() {
-                        st.mode = "standby".into();
-                        st.bind_address = "127.0.0.1:50560".into();
-                        st.detail =
-                            "Aucune interface IPv4 active détectée — simulateur prêt".into();
-                        st.needs_elevation = false;
+                        if st.mode != "npcap" {
+                            st.mode = "standby".into();
+                            st.bind_address = "127.0.0.1:50560".into();
+                            st.detail =
+                                "Aucune interface IPv4 active détectée — simulateur prêt".into();
+                            st.needs_elevation = false;
+                        }
                     }
                 }
             }
@@ -450,6 +751,7 @@ fn windows_raw_interface_loop(
     const IPPROTO_IP: i32 = 0;
     const IP_HDRINCL: i32 = 2;
     const SIO_RCVALL: u32 = 0x9800_0001;
+    const SIO_UDP_CONNRESET: u32 = 0x9800_000C;
     const RCVALL_ON: u32 = 1;
     const INVALID_SOCKET: usize = usize::MAX;
 
@@ -461,11 +763,11 @@ fn windows_raw_interface_loop(
         if raw_sock == INVALID_SOCKET {
             let code = WSAGetLastError();
             if let Ok(mut st) = status.lock() {
-                if st.mode != "rawSocket" {
+                if st.mode != "rawSocket" && st.mode != "npcap" {
                     st.mode = "standby".into();
                     st.bind_address = format!("{local_ip}:5056");
                     st.detail = format!(
-                        "Mode standard non-administrateur (code Winsock {code}) — cliquez sur « Activer Capture Admin »"
+                        "Mode standard non-administrateur (code Winsock {code}) — installez Npcap ou cliquez sur « Activer Capture Admin »"
                     );
                     st.needs_elevation = true;
                 }
@@ -489,7 +791,7 @@ fn windows_raw_interface_loop(
             let code = WSAGetLastError();
             closesocket(raw_sock);
             if let Ok(mut st) = status.lock() {
-                if st.mode != "rawSocket" {
+                if st.mode != "rawSocket" && st.mode != "npcap" {
                     st.mode = "standby".into();
                     st.bind_address = format!("{local_ip}:5056");
                     st.detail = format!("Bind raw socket refusé (code {code}) — mode veille actif");
@@ -527,11 +829,11 @@ fn windows_raw_interface_loop(
             let code = WSAGetLastError();
             closesocket(raw_sock);
             if let Ok(mut st) = status.lock() {
-                if st.mode != "rawSocket" {
+                if st.mode != "rawSocket" && st.mode != "npcap" {
                     st.mode = "standby".into();
                     st.bind_address = format!("{local_ip}:5056");
                     st.detail = format!(
-                        "SIO_RCVALL requiert les droits Administrateur (code {code}) — cliquez sur « Activer Capture Admin »"
+                        "SIO_RCVALL requiert les droits Administrateur (code {code}) — cliquez sur « Activer Capture Admin » ou installez Npcap"
                     );
                     st.needs_elevation = true;
                 }
@@ -539,19 +841,41 @@ fn windows_raw_interface_loop(
             return;
         }
 
+        // Suppress WSAECONNRESET (10054) when ICMP port unreachable is returned by remote endpoints
+        let false_val: u32 = 0;
+        let mut out_dummy: u32 = 0;
+        let mut bytes_ret2: u32 = 0;
+        let _ = WSAIoctl(
+            raw_sock,
+            SIO_UDP_CONNRESET,
+            &false_val,
+            4,
+            &mut out_dummy,
+            4,
+            &mut bytes_ret2,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
+
         if let Ok(mut st) = status.lock() {
-            st.mode = "rawSocket".into();
-            st.bind_address = format!("{local_ip}:5056");
-            st.detail = format!(
-                "Capture directe Photon multi-interfaces active sur {local_ip} (UDP 5055-5060/4530-4540)"
-            );
-            st.needs_elevation = false;
+            if st.mode != "npcap" {
+                st.mode = "rawSocket".into();
+                st.bind_address = format!("{local_ip}:5056");
+                st.detail = format!(
+                    "Capture directe Photon multi-interfaces active sur {local_ip} (UDP 5055-5060/4530-4540)"
+                );
+                st.needs_elevation = false;
+            }
         }
 
         let mut buf = vec![0u8; 65_535];
         loop {
             let n = recv(raw_sock, buf.as_mut_ptr(), buf.len() as i32, 0);
             if n <= 0 {
+                let err = WSAGetLastError();
+                if is_transient_winsock_error(err) {
+                    continue;
+                }
                 break;
             }
             let packet = &buf[..n as usize];
@@ -611,5 +935,17 @@ mod tests {
         let udp = find_ipv4_udp_in_frame(&decoded).unwrap();
         assert_eq!(udp.src_port, 5056);
         assert_eq!(udp.payload, &payload);
+    }
+
+    #[test]
+    fn validates_transient_winsock_error_classification() {
+        assert!(is_transient_winsock_error(10054)); // WSAECONNRESET
+        assert!(is_transient_winsock_error(10040)); // WSAEMSGSIZE
+        assert!(is_transient_winsock_error(10035)); // WSAEWOULDBLOCK
+        assert!(is_transient_winsock_error(10060)); // WSAETIMEDOUT
+        assert!(is_transient_winsock_error(10004)); // WSAEINTR
+        assert!(!is_transient_winsock_error(10009)); // WSAEBADF
+        assert!(!is_transient_winsock_error(10013)); // WSAEACCES
+        assert!(!is_transient_winsock_error(0));
     }
 }

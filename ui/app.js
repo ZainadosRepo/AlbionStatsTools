@@ -335,23 +335,24 @@ const renderHeader = () => {
 
   const badge = el("capture-badge");
   if (badge && cap) {
-    const isRaw = cap.mode === "rawSocket";
-    if (!isRaw) {
+    const isLiveCapture = cap.mode === "rawSocket" || cap.mode === "npcap";
+    const modeLabel = cap.mode === "npcap" ? "Npcap 5056" : "UDP 5056";
+    if (!isLiveCapture) {
       badge.className = "status-badge status-standby";
       badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">Simulateur</span>`;
       badge.title = cap.detail || "Mode veille / simulateur";
     } else if (totalPkts === 0) {
       badge.className = "status-badge status-listening";
-      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">UDP 5056 (Écoute)</span>`;
-      badge.title = `Capture active sur ${cap.bindAddress} (0 paquet capturé)\n\n• Si Albion est ouvert, changez de zone ou attaquez un monstre pour générer du trafic.\n• Si aucun paquet n'apparaît après avoir bougé, vérifiez le Pare-feu Windows ou votre VPN (ExitLag/WARP).`;
+      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">${modeLabel} (Écoute)</span>`;
+      badge.title = `Capture active via ${cap.bindAddress} (${cap.mode})\n\n• Si Albion est ouvert, changez de zone ou attaquez un monstre pour générer du trafic.\n• Si aucun paquet n'apparaît après avoir bougé, lancez en mode Admin ou installez Npcap pour capturer directement au niveau de la carte réseau.`;
     } else if (isStandby) {
       badge.className = "status-badge status-syncing";
-      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">UDP 5056 (${formatExactInt(totalPkts)} pkts)</span>`;
+      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">${modeLabel} (${formatExactInt(totalPkts)} pkts)</span>`;
       badge.title = `${formatExactInt(totalPkts)} paquets Photon capturés (${formatExactInt(totalEvents)} événements).\n\nEn attente de synchronisation du profil : changez de zone (portail / donjon) ou combattez un monstre pour initialiser votre personnage.`;
     } else {
       badge.className = "status-badge status-live";
-      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">UDP 5056</span>`;
-      badge.title = `Capture active sur ${cap.bindAddress}\n• ${formatExactInt(totalPkts)} paquets capturés\n• ${formatExactInt(totalEvents)} événements décodés`;
+      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">${modeLabel}</span>`;
+      badge.title = `Capture active via ${cap.bindAddress} (${cap.mode})\n• ${formatExactInt(totalPkts)} paquets capturés\n• ${formatExactInt(totalEvents)} événements décodés`;
     }
   }
 
@@ -363,6 +364,8 @@ const renderHeader = () => {
       if (statEl) {
         if (totalPkts > 0) {
           statEl.textContent = `${formatExactInt(totalPkts)} paquets détectés (changement de zone requis)`;
+        } else if (cap?.mode === "npcap") {
+          statEl.textContent = "Npcap actif (0 paquet capturé — changez de carte)";
         } else {
           statEl.textContent = "Écoute active (0 paquet capturé)";
         }
