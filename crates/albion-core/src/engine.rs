@@ -1588,7 +1588,68 @@ impl AnalyzerEngine {
         self.reset_session(now_ms);
         self.snapshots.clear();
         self.archived_sessions.clear();
+        if self.local_player.username == "Aurelia" {
+            self.local_player.username = "En attente de connexion…".into();
+            self.local_player.object_id = 0;
+            self.local_player.guild_name.clear();
+            self.local_player.alliance_name.clear();
+        }
         self.dirty_history = true;
+    }
+
+    /// Thoroughly purges any simulation or mock records (Aurelia, Coffre des Brumes, mock dungeons/gathering)
+    /// that might have lingered in persisted history from earlier test versions.
+    pub fn purge_mock_data(&mut self) {
+        let initial_dungeons = self.dungeons.len();
+        let initial_loot = self.loot_log.len();
+        let initial_gather = self.gathering_log.len();
+        let initial_snaps = self.snapshots.len();
+        let initial_archived = self.archived_sessions.len();
+
+        self.dungeons.retain(|d| {
+            d.cluster_index != "MISTS_DUO_T8"
+                && !d.name_fr.contains("Brumes Supérieures (Duo T8)")
+                && !d.name_fr.contains("Brumes Supérieures")
+        });
+        self.loot_log.retain(|l| {
+            l.looted_by != "Aurelia"
+                && l.looted_from != "Coffre des Brumes"
+                && !l.looted_by.contains("Aurelia")
+        });
+        self.gathering_log.retain(|g| {
+            !(g.item_index == 4011 || g.item_index == 4021)
+                && !(g.name_fr.contains("Chanvre fantôme") && g.tier == 8)
+                && !(g.name_fr.contains("Minerai de météorite") && g.tier == 7)
+        });
+        if self.gathering_log.is_empty() {
+            self.gathering_totals = GatheringTotals::default();
+        }
+        self.snapshots
+            .retain(|s| s.label != "Boss Brumes" && !s.players.iter().any(|p| p.name == "Aurelia"));
+        self.archived_sessions
+            .retain(|a| a.label != "Soirée Brumes");
+        if self.local_player.username == "Aurelia" {
+            self.local_player.username = "En attente de connexion…".into();
+            self.local_player.object_id = 0;
+            self.local_player.guild_name.clear();
+            self.local_player.alliance_name.clear();
+        }
+        self.entities.retain(|_, ent| {
+            ent.name != "Aurelia"
+                && ent.name != "Seraphina"
+                && ent.name != "Kaelen"
+                && ent.name != "Thorne"
+                && ent.name != "Vesper"
+        });
+
+        if self.dungeons.len() != initial_dungeons
+            || self.loot_log.len() != initial_loot
+            || self.gathering_log.len() != initial_gather
+            || self.snapshots.len() != initial_snaps
+            || self.archived_sessions.len() != initial_archived
+        {
+            self.dirty_history = true;
+        }
     }
 
     /// Automatically archives a snapshot when exiting a meaningful fight (>= 500 output)

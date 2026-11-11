@@ -1638,17 +1638,6 @@ const initEvents = () => {
     syncCatalogFromGitHub();
   });
 
-  el("btn-simulate")?.addEventListener("click", async () => {
-    const res = await invokeCmd("simulate_session");
-    if (res) {
-      latestState = res;
-      selectedSnapshotId = "live";
-      lastStateSignature = computeStateSignature(res);
-      renderAll();
-      showToast("Scénario Photon UDP injecté (combat 5v5, brumes, récolte, butin, marché).");
-    }
-  });
-
   el("btn-compact")?.addEventListener("click", async () => {
     settings.compactMode = !settings.compactMode;
     await applyWindowPreferences();
@@ -1918,6 +1907,10 @@ const boot = async () => {
   const loaded = await invokeCmd("load_settings");
   if (loaded?.settings) {
     settings = normalizeSettings(loaded.settings);
+    const rawTracked = Array.isArray(loaded.settings.trackedItems) ? loaded.settings.trackedItems : [];
+    if (rawTracked.length !== settings.trackedItems.length) {
+      await persistSettings();
+    }
   }
   if (loaded?.warning) {
     showToast(loaded.warning);

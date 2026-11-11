@@ -57,11 +57,21 @@ export const normalizeSettings = (raw) => {
         .filter((c, i, arr) => arr.indexOf(c) === i)
     : [...DEFAULT_CITIES];
 
+  const legacyMockItems = new Set([
+    "T8_MAIN_NATURESTAFF_KEEPER@1",
+    "T7_2H_CLEAVER_HELL@1",
+    "T8_MAIN_HOLYSTAFF_AVALON@2",
+    "T8_2H_BOW_AVALON@2",
+    "T8_2H_INFERNOSTAFF_MORGANA@2",
+    "T8_BAG_INSIGHT",
+  ]);
+
   const trackedItems = Array.isArray(raw.trackedItems)
     ? raw.trackedItems
         .filter((it) => typeof it === "string")
         .map((it) => it.trim().toUpperCase())
         .filter((it) => it.length > 0 && /^[A-Z0-9_@]+$/.test(it))
+        .filter((it) => !legacyMockItems.has(it))
         .filter((it, i, arr) => arr.indexOf(it) === i)
         .slice(0, 40)
     : [...DEFAULT_TRACKED_ITEMS];

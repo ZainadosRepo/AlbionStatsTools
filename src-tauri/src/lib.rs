@@ -72,8 +72,7 @@ fn simulate_session(
             .engine
             .lock()
             .map_err(|_| "verrou moteur indisponible".to_string())?;
-        eng.run_wire_simulation_scenario(now);
-        let _ = eng.take_dirty_history();
+        eng.clear_all_history(now);
         persist_history_best_effort(&app, &eng);
     }
     get_state(app, state)
@@ -445,8 +444,51 @@ pub fn run() {
                 }
                 if let Ok(hist_path) = history_path(handle) {
                     if let Ok(text) = std::fs::read_to_string(&hist_path) {
-                        if let Ok(hist) = serde_json::from_str(&text) {
+                        if text.contains("Aurelia")
+                            || text.contains("Coffre des Brumes")
+                            || text.contains("MISTS_DUO_T8")
+                            || text.contains("Boss Brumes")
+                            || text.contains("Soirée Brumes")
+                            || text.contains("Chanvre fantôme")
+                            || text.contains("Minerai de météorite")
+                        {
+                            let _ = std::fs::remove_file(&hist_path);
+                            eng.clear_all_history(now);
+                            persist_history_best_effort(handle, &eng);
+                        } else if let Ok(hist) = serde_json::from_str(&text) {
                             eng.restore_history(hist);
+                            eng.purge_mock_data();
+                            if eng.take_dirty_history() {
+                                persist_history_best_effort(handle, &eng);
+                            }
+                        }
+                    }
+                }
+                if let Ok(set_path) = settings_path(handle) {
+                    if let Ok(text) = std::fs::read_to_string(&set_path) {
+                        if text.contains("T8_MAIN_NATURESTAFF_KEEPER@1")
+                            || text.contains("T7_2H_CLEAVER_HELL@1")
+                            || text.contains("T8_MAIN_HOLYSTAFF_AVALON@2")
+                            || text.contains("T8_2H_BOW_AVALON@2")
+                            || text.contains("T8_2H_INFERNOSTAFF_MORGANA@2")
+                            || text.contains("T8_BAG_INSIGHT")
+                        {
+                            if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&text) {
+                                if let Some(tracked) =
+                                    val.get_mut("trackedItems").and_then(|v| v.as_array_mut())
+                                {
+                                    tracked.retain(|item| {
+                                        let s = item.as_str().unwrap_or("");
+                                        s != "T8_MAIN_NATURESTAFF_KEEPER@1"
+                                            && s != "T7_2H_CLEAVER_HELL@1"
+                                            && s != "T8_MAIN_HOLYSTAFF_AVALON@2"
+                                            && s != "T8_2H_BOW_AVALON@2"
+                                            && s != "T8_2H_INFERNOSTAFF_MORGANA@2"
+                                            && s != "T8_BAG_INSIGHT"
+                                    });
+                                }
+                                let _ = settings::save(&set_path, &val);
+                            }
                         }
                     }
                 }
