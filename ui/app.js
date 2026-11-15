@@ -339,8 +339,8 @@ const renderHeader = () => {
     const modeLabel = cap.mode === "npcap" ? "Npcap 5056" : "UDP 5056";
     if (!isLiveCapture) {
       badge.className = "status-badge status-standby";
-      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">Simulateur</span>`;
-      badge.title = cap.detail || "Mode veille / simulateur";
+      badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">Mode veille</span>`;
+      badge.title = cap.detail || "Mode veille (en attente de trafic Albion)";
     } else if (totalPkts === 0) {
       badge.className = "status-badge status-listening";
       badge.innerHTML = `<span class="badge-dot"></span><span class="badge-text">${modeLabel} (Écoute)</span>`;
@@ -436,7 +436,7 @@ const renderCombatTab = () => {
   const ranked = rankMeterPlayers(data.players, settings.meterMode);
   const container = el("meter-rows");
   if (ranked.length === 0) {
-    container.innerHTML = `<div class="empty-state">Aucun combat actif. Lancez Albion Online ou cliquez sur <strong>Simuler</strong> pour tester le compteur.</div>`;
+    container.innerHTML = `<div class="empty-state">Aucun combat actif. Lancez Albion Online, changez de zone ou engagez un combat pour afficher les statistiques en direct.</div>`;
     el("spell-rows").innerHTML = `<div class="empty-state">Sélectionnez un joueur pour inspecter la répartition de ses sorts.</div>`;
     return;
   }

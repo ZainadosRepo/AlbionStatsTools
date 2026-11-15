@@ -162,7 +162,7 @@ impl Protocol16Tag {
     }
 }
 
-/// Decoded Protocol16 value tree.
+/// Decoded Protocol16 / Protocol18 value tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Protocol16Value {
     Null,
@@ -174,13 +174,19 @@ pub enum Protocol16Value {
     Float(f32),
     Double(f64),
     String(String),
+    BoolArray(Vec<bool>),
     ByteArray(Vec<u8>),
+    ShortArray(Vec<i16>),
     IntArray(Vec<i32>),
+    LongArray(Vec<i64>),
+    FloatArray(Vec<f32>),
+    DoubleArray(Vec<f64>),
     StringArray(Vec<String>),
     Array(Vec<Protocol16Value>),
     ObjectArray(Vec<Protocol16Value>),
     Hashtable(Vec<(Protocol16Value, Protocol16Value)>),
     Dictionary(Vec<(Protocol16Value, Protocol16Value)>),
+    Custom { type_code: u8, data: Vec<u8> },
     EventData(Box<EventDataPayload>),
     OperationRequest(Box<OperationRequestPayload>),
     OperationResponse(Box<OperationResponsePayload>),
@@ -251,7 +257,9 @@ impl Protocol16Value {
 
     pub fn as_i64_vec(&self) -> Option<Vec<i64>> {
         match self {
+            Self::LongArray(v) => Some(v.clone()),
             Self::IntArray(v) => Some(v.iter().map(|&x| x as i64).collect()),
+            Self::ShortArray(v) => Some(v.iter().map(|&x| x as i64).collect()),
             Self::ByteArray(v) => Some(v.iter().map(|&x| x as i64).collect()),
             Self::Array(v) | Self::ObjectArray(v) => v.iter().map(Self::as_i64).collect(),
             _ => None,
@@ -261,7 +269,9 @@ impl Protocol16Value {
     pub fn as_i32_vec(&self) -> Option<Vec<i32>> {
         match self {
             Self::IntArray(v) => Some(v.clone()),
+            Self::ShortArray(v) => Some(v.iter().map(|&x| x as i32).collect()),
             Self::ByteArray(v) => Some(v.iter().map(|&x| x as i32).collect()),
+            Self::LongArray(v) => v.iter().map(|&x| i32::try_from(x).ok()).collect(),
             Self::Array(v) | Self::ObjectArray(v) => v.iter().map(Self::as_i32).collect(),
             _ => None,
         }
@@ -269,16 +279,24 @@ impl Protocol16Value {
 
     pub fn as_f64_vec(&self) -> Option<Vec<f64>> {
         match self {
-            Self::Array(v) | Self::ObjectArray(v) => v.iter().map(Self::as_f64).collect(),
+            Self::DoubleArray(v) => Some(v.clone()),
+            Self::FloatArray(v) => Some(v.iter().map(|&x| x as f64).collect()),
             Self::IntArray(v) => Some(v.iter().map(|&x| x as f64).collect()),
+            Self::ShortArray(v) => Some(v.iter().map(|&x| x as f64).collect()),
+            Self::LongArray(v) => Some(v.iter().map(|&x| x as f64).collect()),
+            Self::Array(v) | Self::ObjectArray(v) => v.iter().map(Self::as_f64).collect(),
             _ => None,
         }
     }
 
     pub fn as_f32_vec(&self) -> Option<Vec<f32>> {
         match self {
-            Self::Array(v) | Self::ObjectArray(v) => v.iter().map(Self::as_f32).collect(),
+            Self::FloatArray(v) => Some(v.clone()),
+            Self::DoubleArray(v) => Some(v.iter().map(|&x| x as f32).collect()),
             Self::IntArray(v) => Some(v.iter().map(|&x| x as f32).collect()),
+            Self::ShortArray(v) => Some(v.iter().map(|&x| x as f32).collect()),
+            Self::LongArray(v) => Some(v.iter().map(|&x| x as f32).collect()),
+            Self::Array(v) | Self::ObjectArray(v) => v.iter().map(Self::as_f32).collect(),
             _ => None,
         }
     }
@@ -295,6 +313,15 @@ impl Protocol16Value {
 
     pub fn as_guid_vec(&self) -> Option<Vec<Guid16>> {
         match self {
+            Self::ByteArray(bytes) if bytes.len().is_multiple_of(16) => Some(
+                bytes
+                    .as_chunks::<16>()
+                    .0
+                    .iter()
+                    .copied()
+                    .map(Guid16)
+                    .collect(),
+            ),
             Self::Array(v) | Self::ObjectArray(v) => v.iter().map(Self::as_guid).collect(),
             _ => None,
         }
@@ -749,15 +776,55 @@ pub fn encode_tagged_value(out: &mut Vec<u8>, value: &Protocol16Value) {
             out.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
             out.extend_from_slice(bytes);
         }
+        Protocol16Value::BoolArray(vals) => {
+            out.push(Protocol16Tag::Array as u8);
+            out.extend_from_slice(&(vals.len() as u16).to_be_bytes());
+            out.push(Protocol16Tag::Boolean as u8);
+            for &b in vals {
+                out.push(u8::from(b));
+            }
+        }
         Protocol16Value::ByteArray(bytes) => {
             out.push(Protocol16Tag::ByteArray as u8);
             out.extend_from_slice(&(bytes.len() as i32).to_be_bytes());
             out.extend_from_slice(bytes);
         }
+        Protocol16Value::ShortArray(vals) => {
+            out.push(Protocol16Tag::Array as u8);
+            out.extend_from_slice(&(vals.len() as u16).to_be_bytes());
+            out.push(Protocol16Tag::Short as u8);
+            for &x in vals {
+                out.extend_from_slice(&x.to_be_bytes());
+            }
+        }
         Protocol16Value::IntArray(ints) => {
             out.push(Protocol16Tag::IntArray as u8);
             out.extend_from_slice(&(ints.len() as i32).to_be_bytes());
             for &x in ints {
+                out.extend_from_slice(&x.to_be_bytes());
+            }
+        }
+        Protocol16Value::LongArray(vals) => {
+            out.push(Protocol16Tag::Array as u8);
+            out.extend_from_slice(&(vals.len() as u16).to_be_bytes());
+            out.push(Protocol16Tag::Long as u8);
+            for &x in vals {
+                out.extend_from_slice(&x.to_be_bytes());
+            }
+        }
+        Protocol16Value::FloatArray(vals) => {
+            out.push(Protocol16Tag::Array as u8);
+            out.extend_from_slice(&(vals.len() as u16).to_be_bytes());
+            out.push(Protocol16Tag::Float as u8);
+            for &x in vals {
+                out.extend_from_slice(&x.to_be_bytes());
+            }
+        }
+        Protocol16Value::DoubleArray(vals) => {
+            out.push(Protocol16Tag::Array as u8);
+            out.extend_from_slice(&(vals.len() as u16).to_be_bytes());
+            out.push(Protocol16Tag::Double as u8);
+            for &x in vals {
                 out.extend_from_slice(&x.to_be_bytes());
             }
         }
@@ -794,6 +861,11 @@ pub fn encode_tagged_value(out: &mut Vec<u8>, value: &Protocol16Value) {
                 encode_tagged_value(out, k);
                 encode_tagged_value(out, v);
             }
+        }
+        Protocol16Value::Custom { type_code: _, data } => {
+            out.push(Protocol16Tag::ByteArray as u8);
+            out.extend_from_slice(&(data.len() as i32).to_be_bytes());
+            out.extend_from_slice(data);
         }
         Protocol16Value::EventData(ev) => {
             out.push(Protocol16Tag::EventData as u8);
@@ -887,6 +959,11 @@ mod tests {
                 Protocol16Value::Long(550_000),
             )]),
         );
+        table.insert(12, Protocol16Value::ShortArray(vec![101, 202, 303]));
+        table.insert(13, Protocol16Value::LongArray(vec![10_000, -20_000]));
+        table.insert(14, Protocol16Value::DoubleArray(vec![1.5, -2.5]));
+        table.insert(15, Protocol16Value::FloatArray(vec![0.5, 1.25]));
+        table.insert(16, Protocol16Value::BoolArray(vec![true, false, true]));
         table.insert(252, Protocol16Value::Short(6));
 
         let ev = EventDataPayload {
@@ -916,6 +993,42 @@ mod tests {
             decoded.parameters.get_string_vec(9),
             Some(vec!["Kaelen".to_string(), "Lyra".to_string()])
         );
+        assert_eq!(
+            decoded.parameters.get_i32_vec(12),
+            Some(vec![101, 202, 303])
+        );
+        assert_eq!(
+            decoded.parameters.get_i64_vec(13),
+            Some(vec![10_000, -20_000])
+        );
+        assert_eq!(decoded.parameters.get_f64_vec(14), Some(vec![1.5, -2.5]));
+        assert_eq!(decoded.parameters.get_f32_vec(15), Some(vec![0.5, 1.25]));
         assert_eq!(decoded.parameters.get_i16(252), Some(6));
+    }
+
+    #[test]
+    fn coerces_typed_arrays_and_packed_guids() {
+        let shorts = Protocol16Value::ShortArray(vec![-5, 12, 300]);
+        assert_eq!(shorts.as_i32_vec(), Some(vec![-5, 12, 300]));
+        assert_eq!(shorts.as_i64_vec(), Some(vec![-5, 12, 300]));
+
+        let doubles = Protocol16Value::DoubleArray(vec![12.5, -3.25]);
+        assert_eq!(doubles.as_f64_vec(), Some(vec![12.5, -3.25]));
+        assert_eq!(doubles.as_f32_vec(), Some(vec![12.5, -3.25]));
+
+        let floats = Protocol16Value::FloatArray(vec![4.5, -1.5]);
+        assert_eq!(floats.as_f64_vec(), Some(vec![4.5, -1.5]));
+        assert_eq!(floats.as_f32_vec(), Some(vec![4.5, -1.5]));
+
+        let mut packed = vec![0xAAu8; 16];
+        packed.extend_from_slice(&[0xBBu8; 16]);
+        let packed_val = Protocol16Value::ByteArray(packed);
+        assert_eq!(
+            packed_val.as_guid_vec(),
+            Some(vec![Guid16([0xAA; 16]), Guid16([0xBB; 16])])
+        );
+
+        let odd_bytes = Protocol16Value::ByteArray(vec![0xAAu8; 17]);
+        assert_eq!(odd_bytes.as_guid_vec(), None);
     }
 }

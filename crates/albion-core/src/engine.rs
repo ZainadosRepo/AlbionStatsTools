@@ -10,7 +10,7 @@ use crate::events::{
 use crate::photon::{build_photon_fragmented_packets, build_photon_udp_packet, PhotonParser};
 use crate::protocol16::{FixPoint, Guid16};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 const MAX_LOOT_LOG: usize = 250;
 const MAX_GATHERING_LOG: usize = 200;
@@ -391,6 +391,8 @@ pub struct AnalyzerEngine {
     party_guids: HashMap<Guid16, String>,
     last_player_health: HashMap<i64, f64>,
     discovered_items: HashMap<i64, DiscoveredItem>,
+    opened_chests: HashSet<i64>,
+    opened_caged_wisps: HashSet<i64>,
 
     snapshots: Vec<MeterSnapshot>,
     session: SessionStats,
@@ -467,6 +469,8 @@ impl AnalyzerEngine {
             party_guids: HashMap::new(),
             last_player_health: HashMap::new(),
             discovered_items: HashMap::new(),
+            opened_chests: HashSet::new(),
+            opened_caged_wisps: HashSet::new(),
             snapshots: Vec::new(),
             session: SessionStats {
                 elapsed_seconds: 0.0,
@@ -551,11 +555,8 @@ impl AnalyzerEngine {
                 reputation,
                 is_respec_active,
             } => {
-                let map_name_fr = self
-                    .catalog
-                    .cluster(&map_index)
-                    .map(|c| c.name_fr.clone())
-                    .unwrap_or_else(|| format!("Zone {map_index}"));
+                let (map_name_fr, _, _, _, _) =
+                    self.resolve_cluster_metadata(&map_index, "", "", 0);
 
                 self.local_player = LocalPlayerProfile {
                     object_id: user_object_id,
@@ -871,14 +872,18 @@ impl AnalyzerEngine {
                     now_ms,
                 );
             }
-            AlbionTelemetryEvent::LootChestOpened { .. } => {
-                if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
-                    run.chests_opened += 1;
+            AlbionTelemetryEvent::LootChestOpened { object_id } => {
+                if self.opened_chests.insert(object_id) {
+                    if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
+                        run.chests_opened += 1;
+                    }
                 }
             }
-            AlbionTelemetryEvent::MistsWispCageOpened { .. } => {
-                if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
-                    run.caged_wisps_opened += 1;
+            AlbionTelemetryEvent::MistsWispCageOpened { object_id } => {
+                if self.opened_caged_wisps.insert(object_id) {
+                    if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
+                        run.caged_wisps_opened += 1;
+                    }
                 }
             }
             AlbionTelemetryEvent::HarvestFinished {
@@ -1162,6 +1167,200 @@ impl AnalyzerEngine {
         }
     }
 
+    fn is_instanced_cluster_kind(kind: &str, index: &str) -> bool {
+        let upper_index = index.to_ascii_uppercase();
+        matches!(
+            kind,
+            "mists"
+                | "soloDungeon"
+                | "groupDungeon"
+                | "avalonianDungeon"
+                | "hellgate"
+                | "corruptedDungeon"
+                | "abyssalDepths"
+        ) || upper_index.starts_with("MISTS")
+            || upper_index.starts_with("RD_")
+            || upper_index.starts_with("HELLGATE")
+            || upper_index.starts_with("CORRUPTED")
+            || upper_index.starts_with("ABYSSAL")
+            || upper_index.contains("@MISTS")
+            || upper_index.contains("@RANDOMDUNGEON")
+            || upper_index.contains("@CORRUPTEDDUNGEON")
+            || upper_index.contains("@HELLCLUSTER")
+            || upper_index.contains("@HELLDUNGEON")
+            || upper_index.contains("@MISTSDUNGEON")
+    }
+
+    fn extract_tier_hint(s: &str) -> Option<u8> {
+        let bytes = s.as_bytes();
+        for i in 0..bytes.len().saturating_sub(1) {
+            if (bytes[i] == b'T' || bytes[i] == b't') && (b'4'..=b'8').contains(&bytes[i + 1]) {
+                let prev_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+                let next_ok = i + 2 >= bytes.len() || !bytes[i + 2].is_ascii_alphanumeric();
+                if prev_ok && next_ok {
+                    return Some(bytes[i + 1] - b'0');
+                }
+            }
+        }
+        None
+    }
+
+    fn resolve_cluster_metadata(
+        &self,
+        index: &str,
+        world_map_data_type: &str,
+        island_name: &str,
+        mists_dungeon_tier: i32,
+    ) -> (String, String, String, u8, bool) {
+        if let Some(c) = self.catalog.cluster(index) {
+            if !c.name_fr.is_empty() {
+                let is_instanced = Self::is_instanced_cluster_kind(&c.kind, index);
+                return (
+                    c.name_fr.clone(),
+                    c.name_en.clone(),
+                    c.kind.clone(),
+                    c.tier,
+                    is_instanced,
+                );
+            }
+        }
+
+        let upper_index = index.to_ascii_uppercase();
+        let upper_type = world_map_data_type.to_ascii_uppercase();
+        let has_token = |tok: &str| upper_index.contains(tok) || upper_type.contains(tok);
+
+        let (kind, fallback_fr, fallback_en, instanced_hint) =
+            if has_token("@HELLDUNGEON") || has_token("ABYSSAL") {
+                (
+                    "abyssalDepths".to_string(),
+                    "Profondeurs Abyssales".to_string(),
+                    "Abyssal Depths".to_string(),
+                    true,
+                )
+            } else if has_token("@HELLCLUSTER") || has_token("HELLGATE") {
+                (
+                    "hellgate".to_string(),
+                    "Hellgate".to_string(),
+                    "Hellgate".to_string(),
+                    true,
+                )
+            } else if has_token("@CORRUPTEDDUNGEON") || has_token("CORRUPTED") {
+                (
+                    "corruptedDungeon".to_string(),
+                    "Donjon Corrompu".to_string(),
+                    "Corrupted Dungeon".to_string(),
+                    true,
+                )
+            } else if has_token("@MISTSDUNGEON") || has_token("MISTSDUNGEON") {
+                (
+                    "mists".to_string(),
+                    "Donjon des Brumes".to_string(),
+                    "Mists Dungeon".to_string(),
+                    true,
+                )
+            } else if has_token("@MISTS")
+                || upper_index.starts_with("MISTS")
+                || upper_type == "MISTS"
+                || upper_type.contains("MISTS_")
+                || upper_type.contains("_MISTS")
+            {
+                let (fr, en) = if has_token("DUO") {
+                    ("Brumes (Duo)", "Mists (Duo)")
+                } else {
+                    ("Brumes", "Mists")
+                };
+                ("mists".to_string(), fr.to_string(), en.to_string(), true)
+            } else if has_token("@RANDOMDUNGEON")
+                || upper_index.starts_with("RD_")
+                || has_token("RANDOMDUNGEON")
+                || upper_type.contains("_RD_")
+            {
+                if has_token("AVALON") {
+                    (
+                        "avalonianDungeon".to_string(),
+                        "Donjon Avalonien".to_string(),
+                        "Avalonian Dungeon".to_string(),
+                        true,
+                    )
+                } else if has_token("GROUP") || has_token("VET") {
+                    (
+                        "groupDungeon".to_string(),
+                        "Donjon de Groupe".to_string(),
+                        "Group Dungeon".to_string(),
+                        true,
+                    )
+                } else {
+                    (
+                        "soloDungeon".to_string(),
+                        "Donjon aléatoire".to_string(),
+                        "Random Dungeon".to_string(),
+                        true,
+                    )
+                }
+            } else if has_token("@ISLAND") || !island_name.trim().is_empty() {
+                let label = if !island_name.trim().is_empty() {
+                    island_name.trim().to_string()
+                } else {
+                    "Île personnelle".to_string()
+                };
+                ("island".to_string(), label.clone(), label, false)
+            } else if has_token("@HIDEOUT") {
+                (
+                    "hideout".to_string(),
+                    "Repaire".to_string(),
+                    "Hideout".to_string(),
+                    false,
+                )
+            } else if has_token("@EXPEDITION") {
+                (
+                    "expedition".to_string(),
+                    "Expédition".to_string(),
+                    "Expedition".to_string(),
+                    false,
+                )
+            } else if has_token("@ARENA") {
+                (
+                    "arena".to_string(),
+                    "Arène".to_string(),
+                    "Arena".to_string(),
+                    false,
+                )
+            } else if has_token("@DRAGONAREA") {
+                (
+                    "openWorld".to_string(),
+                    "Zone Dragon".to_string(),
+                    "Dragon Area".to_string(),
+                    false,
+                )
+            } else {
+                let fallback_kind = if !world_map_data_type.trim().is_empty() {
+                    world_map_data_type.trim().to_string()
+                } else {
+                    "openWorld".to_string()
+                };
+                let label = if !island_name.trim().is_empty() {
+                    island_name.trim().to_string()
+                } else if !index.trim().is_empty() {
+                    format!("Zone {index}")
+                } else {
+                    "Zone inconnue".to_string()
+                };
+                let instanced = Self::is_instanced_cluster_kind(&fallback_kind, index);
+                (fallback_kind, label.clone(), label, instanced)
+            };
+
+        let tier = if (4..=8).contains(&mists_dungeon_tier) {
+            mists_dungeon_tier as u8
+        } else {
+            Self::extract_tier_hint(world_map_data_type)
+                .or_else(|| Self::extract_tier_hint(index))
+                .unwrap_or(if instanced_hint { 6 } else { 4 })
+        };
+
+        let is_instanced = instanced_hint || Self::is_instanced_cluster_kind(&kind, index);
+        (fallback_fr, fallback_en, kind, tier, is_instanced)
+    }
+
     fn handle_cluster_change(
         &mut self,
         index: &str,
@@ -1177,6 +1376,8 @@ impl AnalyzerEngine {
 
         // Purge transient non-party entities and ground items from the previous zone
         self.discovered_items.clear();
+        self.opened_chests.clear();
+        self.opened_caged_wisps.clear();
         self.last_player_health.clear();
         self.entities.retain(|_, e| e.is_party || e.is_self);
         self.guid_to_object_id
@@ -1191,45 +1392,15 @@ impl AnalyzerEngine {
             self.dirty_history = true;
         }
 
-        let cluster_meta = self.catalog.cluster(index).cloned();
-        let name_fr = cluster_meta
-            .as_ref()
-            .map(|c| c.name_fr.clone())
-            .filter(|s| !s.is_empty())
-            .or_else(|| (!island_name.is_empty()).then(|| island_name.to_string()))
-            .unwrap_or_else(|| format!("Zone {index}"));
-        let name_en = cluster_meta
-            .as_ref()
-            .map(|c| c.name_en.clone())
-            .unwrap_or_else(|| name_fr.clone());
-        let kind = cluster_meta
-            .as_ref()
-            .map(|c| c.kind.clone())
-            .filter(|s| !s.is_empty())
-            .or_else(|| (!world_map_data_type.is_empty()).then(|| world_map_data_type.to_string()))
-            .unwrap_or_else(|| "openWorld".into());
-        let tier = cluster_meta
-            .as_ref()
-            .map(|c| c.tier)
-            .unwrap_or_else(|| mists_dungeon_tier.clamp(4, 8) as u8);
+        let (name_fr, name_en, kind, tier, is_instanced) = self.resolve_cluster_metadata(
+            index,
+            world_map_data_type,
+            island_name,
+            mists_dungeon_tier,
+        );
 
         self.local_player.current_map_index = index.to_string();
         self.local_player.current_map_name_fr = name_fr.clone();
-
-        let is_instanced = matches!(
-            kind.as_str(),
-            "mists"
-                | "soloDungeon"
-                | "groupDungeon"
-                | "avalonianDungeon"
-                | "hellgate"
-                | "corruptedDungeon"
-                | "abyssalDepths"
-        ) || index.starts_with("MISTS")
-            || index.starts_with("RD_")
-            || index.starts_with("HELLGATE")
-            || index.starts_with("CORRUPTED")
-            || index.starts_with("ABYSSAL");
 
         if is_instanced {
             let id = self.alloc_id();
@@ -1466,15 +1637,30 @@ impl AnalyzerEngine {
     }
 
     fn handle_mail_response(&mut self, mail_id: i64, content: &str) {
-        // Albion Market mail format: "UNIT_PRICE|TOTAL_PRICE|AMOUNT|ITEM_UNIQUE_NAME"
         let parts: Vec<&str> = content.split('|').collect();
         if parts.len() < 4 {
             return;
         }
-        let unit_raw = parts[0].parse::<i64>().unwrap_or(0);
-        let total_raw = parts[1].parse::<i64>().unwrap_or(0);
-        let amount = parts[2].parse::<i32>().unwrap_or(1);
-        let unique_name = parts[3].trim().to_string();
+        // Live Albion market mail format: "QUANTITY|UNIQUE_ITEM_NAME|TOTAL_PRICE|UNIT_PRICE"
+        // Legacy/simulation format: "UNIT_PRICE|TOTAL_PRICE|AMOUNT|ITEM_UNIQUE_NAME"
+        let (unit_raw, total_raw, amount, unique_name) = match (
+            parts[0].trim().parse::<i32>(),
+            parts[1].trim(),
+            parts[2].trim().parse::<i64>(),
+            parts[3].trim().parse::<i64>(),
+        ) {
+            (Ok(qty), item, Ok(total), Ok(unit))
+                if qty > 0 && item.bytes().any(|b| b.is_ascii_alphabetic()) =>
+            {
+                (unit, total, qty, item.to_string())
+            }
+            _ => (
+                parts[0].trim().parse::<i64>().unwrap_or(0),
+                parts[1].trim().parse::<i64>().unwrap_or(0),
+                parts[2].trim().parse::<i32>().unwrap_or(1).max(1),
+                parts[3].trim().to_string(),
+            ),
+        };
         let item_name_fr = self
             .catalog
             .item_by_unique_name(&unique_name)
@@ -1550,6 +1736,8 @@ impl AnalyzerEngine {
     pub fn reset_session(&mut self, now_ms: u64) {
         self.reset_session_counters(now_ms);
         self.dungeons.clear();
+        self.opened_chests.clear();
+        self.opened_caged_wisps.clear();
         self.gathering_totals = GatheringTotals::default();
         self.gathering_log.clear();
         self.loot_log.clear();
@@ -1562,6 +1750,8 @@ impl AnalyzerEngine {
     /// Clears all recorded dungeon, mist, and corrupted runs.
     pub fn clear_dungeons(&mut self) {
         self.dungeons.clear();
+        self.opened_chests.clear();
+        self.opened_caged_wisps.clear();
         self.dirty_history = true;
     }
 
@@ -2980,5 +3170,217 @@ mod tests {
         );
         assert_eq!(harvest_engine.local_player.object_id, 5555);
         assert_eq!(harvest_engine.snapshot(5_100).gathering_totals.ore, 4);
+    }
+
+    #[test]
+    fn resolves_dynamic_instance_cluster_ids_and_tier_hints() {
+        let catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let mut engine = AnalyzerEngine::new(catalog, 1_000);
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::JoinResponse {
+                user_object_id: 10,
+                user_guid: Guid16([0x11; 16]),
+                username: "Scout".into(),
+                map_index: "@MISTS@5581349013".into(),
+                main_map_index: "@MISTS@5581349013".into(),
+                guild_name: String::new(),
+                alliance_name: String::new(),
+                current_focus_points: 0.0,
+                max_focus_points: 30_000.0,
+                silver: FixPoint::from_f64(0.0),
+                gold: FixPoint::from_f64(0.0),
+                learning_points: FixPoint::from_f64(0.0),
+                reputation: 0.0,
+                is_respec_active: false,
+            },
+            1_100,
+        );
+        assert_eq!(
+            engine.snapshot(1_150).local_player.current_map_name_fr,
+            "Brumes"
+        );
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ChangeClusterResponse {
+                index: "@MISTS@5581349013".into(),
+                world_map_data_type: "T8_MISTS_DEFAULT".into(),
+                island_name: String::new(),
+                mists_dungeon_tier: 0,
+            },
+            1_200,
+        );
+        let snap_mists = engine.snapshot(1_250);
+        assert_eq!(snap_mists.dungeons.len(), 1);
+        assert_eq!(snap_mists.dungeons[0].kind, "mists");
+        assert_eq!(snap_mists.dungeons[0].tier, 8);
+        assert_eq!(snap_mists.dungeons[0].name_fr, "Brumes");
+        assert!(snap_mists.dungeons[0].is_active);
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::JoinResponse {
+                user_object_id: 10,
+                user_guid: Guid16([0x11; 16]),
+                username: "Scout".into(),
+                map_index: "@RANDOMDUNGEON@999".into(),
+                main_map_index: String::new(),
+                guild_name: String::new(),
+                alliance_name: String::new(),
+                current_focus_points: 0.0,
+                max_focus_points: 30_000.0,
+                silver: FixPoint::from_f64(0.0),
+                gold: FixPoint::from_f64(0.0),
+                learning_points: FixPoint::from_f64(0.0),
+                reputation: 0.0,
+                is_respec_active: false,
+            },
+            1_300,
+        );
+        assert_eq!(
+            engine.snapshot(1_350).local_player.current_map_name_fr,
+            "Donjon aléatoire"
+        );
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ChangeClusterResponse {
+                index: "@RANDOMDUNGEON@123456".into(),
+                world_map_data_type: "HIGHLAND_RD_GROUP_T7".into(),
+                island_name: String::new(),
+                mists_dungeon_tier: 0,
+            },
+            1_400,
+        );
+        let snap_rd = engine.snapshot(1_450);
+        assert_eq!(snap_rd.dungeons.len(), 2);
+        assert_eq!(snap_rd.dungeons[0].kind, "groupDungeon");
+        assert_eq!(snap_rd.dungeons[0].tier, 7);
+        assert_eq!(snap_rd.dungeons[0].name_fr, "Donjon de Groupe");
+        assert!(!snap_rd.dungeons[1].is_active);
+    }
+
+    #[test]
+    fn deduplicates_chest_and_wisp_updates_and_clears_sets() {
+        let catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let mut engine = AnalyzerEngine::new(catalog, 1_000);
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ChangeClusterResponse {
+                index: "@MISTS@1001".into(),
+                world_map_data_type: "T8_MISTS_DEFAULT".into(),
+                island_name: String::new(),
+                mists_dungeon_tier: 8,
+            },
+            1_100,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::LootChestOpened { object_id: 7001 },
+            1_200,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::LootChestOpened { object_id: 7001 },
+            1_250,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::LootChestOpened { object_id: 7002 },
+            1_300,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::MistsWispCageOpened { object_id: 8001 },
+            1_350,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::MistsWispCageOpened { object_id: 8001 },
+            1_400,
+        );
+
+        let snap1 = engine.snapshot(1_450);
+        assert_eq!(snap1.dungeons[0].chests_opened, 2);
+        assert_eq!(snap1.dungeons[0].caged_wisps_opened, 1);
+
+        // Switching cluster clears deduplication sets so identical object IDs can count in the new run
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ChangeClusterResponse {
+                index: "@MISTS@1002".into(),
+                world_map_data_type: "T8_MISTS_DEFAULT".into(),
+                island_name: String::new(),
+                mists_dungeon_tier: 8,
+            },
+            2_000,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::LootChestOpened { object_id: 7001 },
+            2_100,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::MistsWispCageOpened { object_id: 8001 },
+            2_150,
+        );
+
+        let snap2 = engine.snapshot(2_200);
+        assert_eq!(snap2.dungeons[0].chests_opened, 1);
+        assert_eq!(snap2.dungeons[0].caged_wisps_opened, 1);
+
+        engine.clear_dungeons();
+        assert!(engine.opened_chests.is_empty());
+        assert!(engine.opened_caged_wisps.is_empty());
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ChangeClusterResponse {
+                index: "@MISTS@1003".into(),
+                world_map_data_type: "T8_MISTS_DEFAULT".into(),
+                island_name: String::new(),
+                mists_dungeon_tier: 8,
+            },
+            3_000,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::LootChestOpened { object_id: 7001 },
+            3_100,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::MistsWispCageOpened { object_id: 8001 },
+            3_150,
+        );
+        engine.reset_session(3_200);
+        assert!(engine.opened_chests.is_empty());
+        assert!(engine.opened_caged_wisps.is_empty());
+    }
+
+    #[test]
+    fn parses_live_and_legacy_market_mail_formats() {
+        let catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let mut engine = AnalyzerEngine::new(catalog, 1_000);
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ReadMailResponse {
+                mail_id: 901,
+                content: "2|T7_2H_CLEAVER_HELL@1|8900000000|4450000000".into(),
+            },
+            1_100,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ReadMailResponse {
+                mail_id: 902,
+                content: "4450000000|4450000000|1|T7_2H_CLEAVER_HELL@1".into(),
+            },
+            1_200,
+        );
+
+        let snap = engine.snapshot(1_300);
+        assert_eq!(snap.mail_notifications.len(), 2);
+
+        let legacy = &snap.mail_notifications[0];
+        assert_eq!(legacy.mail_id, 902);
+        assert_eq!(legacy.item_unique_name, "T7_2H_CLEAVER_HELL@1");
+        assert_eq!(legacy.amount, 1);
+        assert!((legacy.unit_price_silver - 445_000.0).abs() < 0.01);
+        assert!((legacy.total_price_silver - 445_000.0).abs() < 0.01);
+
+        let live = &snap.mail_notifications[1];
+        assert_eq!(live.mail_id, 901);
+        assert_eq!(live.item_unique_name, "T7_2H_CLEAVER_HELL@1");
+        assert_eq!(live.amount, 2);
+        assert!((live.unit_price_silver - 445_000.0).abs() < 0.01);
+        assert!((live.total_price_silver - 890_000.0).abs() < 0.01);
     }
 }
