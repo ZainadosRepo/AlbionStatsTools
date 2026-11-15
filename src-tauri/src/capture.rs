@@ -78,7 +78,8 @@ fn enumerate_windows_adapter_ips(out: &mut Vec<Ipv4Addr>) {
                     if offset + row_size > buf.len() {
                         break;
                     }
-                    let row = *(buf.as_ptr().add(offset) as *const MibIpAddrRow);
+                    let row =
+                        core::ptr::read_unaligned(buf.as_ptr().add(offset) as *const MibIpAddrRow);
                     let ip = Ipv4Addr::from(u32::from_be(row.dw_addr));
                     if !ip.is_loopback()
                         && !ip.is_unspecified()
@@ -659,13 +660,13 @@ mod npcap {
 
     pub fn try_load_npcap() -> Option<Arc<NpcapLib>> {
         unsafe {
-            let _ = SetDllDirectoryA(b"C:\\Windows\\System32\\Npcap\0".as_ptr() as *const i8);
+            let _ = SetDllDirectoryA(c"C:\\Windows\\System32\\Npcap".as_ptr());
         }
 
         let candidates = [
-            b"wpcap.dll\0".as_ptr() as *const i8,
-            b"C:\\Windows\\System32\\Npcap\\wpcap.dll\0".as_ptr() as *const i8,
-            b"C:\\Windows\\SysWOW64\\Npcap\\wpcap.dll\0".as_ptr() as *const i8,
+            c"wpcap.dll".as_ptr(),
+            c"C:\\Windows\\System32\\Npcap\\wpcap.dll".as_ptr(),
+            c"C:\\Windows\\SysWOW64\\Npcap\\wpcap.dll".as_ptr(),
         ];
 
         let mut h = 0;
@@ -763,8 +764,8 @@ fn start_npcap_capture(
         return false;
     }
 
-    let bpf_primary = b"((ip and ((udp and (portrange 5055-5060 or portrange 4530-4540)) or (ip[6:2] & 0x3fff != 0))) or (ip6 and (udp and (portrange 5055-5060 or portrange 4530-4540))))\0";
-    let bpf_fallback = b"udp and (port 5055 or port 5056 or port 5058 or port 4535)\0";
+    let bpf_primary = c"((ip and ((udp and (portrange 5055-5060 or portrange 4530-4540)) or (ip[6:2] & 0x3fff != 0))) or (ip6 and (udp and (portrange 5055-5060 or portrange 4530-4540))))";
+    let bpf_fallback = c"udp and (port 5055 or port 5056 or port 5058 or port 4535)";
     let mut opened_count = 0usize;
 
     // Pass 1 opens adapters reporting PCAP_IF_UP; Pass 2 opens non-loopback adapters if none reported UP.
@@ -782,19 +783,13 @@ fn start_npcap_capture(
                 let raw_handle =
                     unsafe { (lib.pcap_open_live)(dev.name, 65_535, 1, 20, open_err.as_mut_ptr()) };
                 if !raw_handle.is_null() {
-                    let apply_filter = |expr: &[u8]| -> bool {
+                    let apply_filter = |expr: &CStr| -> bool {
                         let mut bpf = BpfProgram {
                             bf_len: 0,
                             bf_insns: core::ptr::null_mut(),
                         };
                         let comp_res = unsafe {
-                            (lib.pcap_compile)(
-                                raw_handle,
-                                &mut bpf,
-                                expr.as_ptr() as *const i8,
-                                1,
-                                0xFFFF_FFFF,
-                            )
+                            (lib.pcap_compile)(raw_handle, &mut bpf, expr.as_ptr(), 1, 0xFFFF_FFFF)
                         };
                         if comp_res == 0 {
                             let set_res = unsafe { (lib.pcap_setfilter)(raw_handle, &mut bpf) };
@@ -981,25 +976,49 @@ fn windows_raw_supervisor(engine: Arc<Mutex<AnalyzerEngine>>, status: Arc<Mutex<
 }
 
 #[cfg(target_os = "windows")]
-fn windows_raw_interface_loop(
-    local_ip: Ipv4Addr,
-    engine: Arc<Mutex<AnalyzerEngine>>,
-    status: Arc<Mutex<CaptureStatus>>,
-) {
+mod ws2 {
     #[repr(C)]
-    struct SockAddrIn {
-        sin_family: u16,
-        sin_port: u16,
-        sin_addr: u32,
-        sin_zero: [u8; 8],
+    #[allow(dead_code)]
+    pub struct SockAddrIn {
+        pub sin_family: u16,
+        pub sin_port: u16,
+        pub sin_addr: u32,
+        pub sin_zero: [u8; 8],
     }
+
+    #[repr(C)]
+    #[allow(dead_code)]
+    pub struct SockAddrIn6 {
+        pub sin6_family: u16,
+        pub sin6_port: u16,
+        pub sin6_flowinfo: u32,
+        pub sin6_addr: [u8; 16],
+        pub sin6_scope_id: u32,
+    }
+
+    pub const AF_INET: i32 = 2;
+    pub const AF_INET6: i32 = 23;
+    pub const SOCK_RAW: i32 = 3;
+    pub const IPPROTO_IP: i32 = 0;
+    pub const IPPROTO_UDP: i32 = 17;
+    pub const IP_HDRINCL: i32 = 2;
+    pub const SIO_RCVALL: u32 = 0x9800_0001;
+    pub const SIO_UDP_CONNRESET: u32 = 0x9800_000C;
+    pub const RCVALL_ON: u32 = 1;
+    pub const INVALID_SOCKET: usize = usize::MAX;
 
     #[link(name = "ws2_32")]
     extern "system" {
-        fn socket(af: i32, sock_type: i32, protocol: i32) -> usize;
-        fn bind(s: usize, name: *const SockAddrIn, namelen: i32) -> i32;
-        fn setsockopt(s: usize, level: i32, optname: i32, optval: *const u8, optlen: i32) -> i32;
-        fn WSAIoctl(
+        pub fn socket(af: i32, sock_type: i32, protocol: i32) -> usize;
+        pub fn bind(s: usize, name: *const core::ffi::c_void, namelen: i32) -> i32;
+        pub fn setsockopt(
+            s: usize,
+            level: i32,
+            optname: i32,
+            optval: *const u8,
+            optlen: i32,
+        ) -> i32;
+        pub fn WSAIoctl(
             s: usize,
             dwIoControlCode: u32,
             lpvInBuffer: *const u32,
@@ -1010,27 +1029,25 @@ fn windows_raw_interface_loop(
             lpOverlapped: *mut core::ffi::c_void,
             lpCompletionRoutine: *mut core::ffi::c_void,
         ) -> i32;
-        fn recv(s: usize, buf: *mut u8, len: i32, flags: i32) -> i32;
-        fn closesocket(s: usize) -> i32;
-        fn WSAGetLastError() -> i32;
+        pub fn recv(s: usize, buf: *mut u8, len: i32, flags: i32) -> i32;
+        pub fn closesocket(s: usize) -> i32;
+        pub fn WSAGetLastError() -> i32;
     }
+}
 
-    const AF_INET: i32 = 2;
-    const SOCK_RAW: i32 = 3;
-    const IPPROTO_IP: i32 = 0;
-    const IP_HDRINCL: i32 = 2;
-    const SIO_RCVALL: u32 = 0x9800_0001;
-    const SIO_UDP_CONNRESET: u32 = 0x9800_000C;
-    const RCVALL_ON: u32 = 1;
-    const INVALID_SOCKET: usize = usize::MAX;
-
+#[cfg(target_os = "windows")]
+fn windows_raw_interface_loop(
+    local_ip: Ipv4Addr,
+    engine: Arc<Mutex<AnalyzerEngine>>,
+    status: Arc<Mutex<CaptureStatus>>,
+) {
     let _winsock_guard = UdpSocket::bind("127.0.0.1:0");
 
     // SAFETY: Standard Winsock2 calls with valid stack buffers and bounds-checked lengths.
     unsafe {
-        let raw_sock = socket(AF_INET, SOCK_RAW, IPPROTO_IP);
-        if raw_sock == INVALID_SOCKET {
-            let code = WSAGetLastError();
+        let raw_sock = ws2::socket(ws2::AF_INET, ws2::SOCK_RAW, ws2::IPPROTO_IP);
+        if raw_sock == ws2::INVALID_SOCKET {
+            let code = ws2::WSAGetLastError();
             if let Ok(mut st) = status.lock() {
                 if st.mode != "rawSocket" && st.mode != "npcap" {
                     st.mode = "standby".into();
@@ -1044,21 +1061,21 @@ fn windows_raw_interface_loop(
             return;
         }
 
-        let addr = SockAddrIn {
-            sin_family: AF_INET as u16,
+        let addr = ws2::SockAddrIn {
+            sin_family: ws2::AF_INET as u16,
             sin_port: 0,
             sin_addr: u32::from_ne_bytes(local_ip.octets()),
             sin_zero: [0; 8],
         };
 
-        if bind(
+        if ws2::bind(
             raw_sock,
-            &addr as *const SockAddrIn,
-            core::mem::size_of::<SockAddrIn>() as i32,
+            &addr as *const ws2::SockAddrIn as *const core::ffi::c_void,
+            core::mem::size_of::<ws2::SockAddrIn>() as i32,
         ) != 0
         {
-            let code = WSAGetLastError();
-            closesocket(raw_sock);
+            let code = ws2::WSAGetLastError();
+            ws2::closesocket(raw_sock);
             if let Ok(mut st) = status.lock() {
                 if st.mode != "rawSocket" && st.mode != "npcap" {
                     st.mode = "standby".into();
@@ -1071,20 +1088,20 @@ fn windows_raw_interface_loop(
         }
 
         let hdrincl: u32 = 1;
-        let _ = setsockopt(
+        let _ = ws2::setsockopt(
             raw_sock,
-            IPPROTO_IP,
-            IP_HDRINCL,
+            ws2::IPPROTO_IP,
+            ws2::IP_HDRINCL,
             &hdrincl as *const u32 as *const u8,
             4,
         );
 
-        let in_val: u32 = RCVALL_ON;
+        let in_val: u32 = ws2::RCVALL_ON;
         let mut out_val: u32 = 0;
         let mut bytes_ret: u32 = 0;
-        let ioctl_res = WSAIoctl(
+        let ioctl_res = ws2::WSAIoctl(
             raw_sock,
-            SIO_RCVALL,
+            ws2::SIO_RCVALL,
             &in_val,
             4,
             &mut out_val,
@@ -1095,8 +1112,8 @@ fn windows_raw_interface_loop(
         );
 
         if ioctl_res != 0 {
-            let code = WSAGetLastError();
-            closesocket(raw_sock);
+            let code = ws2::WSAGetLastError();
+            ws2::closesocket(raw_sock);
             if let Ok(mut st) = status.lock() {
                 if st.mode != "rawSocket" && st.mode != "npcap" {
                     st.mode = "standby".into();
@@ -1114,9 +1131,9 @@ fn windows_raw_interface_loop(
         let false_val: u32 = 0;
         let mut out_dummy: u32 = 0;
         let mut bytes_ret2: u32 = 0;
-        let _ = WSAIoctl(
+        let _ = ws2::WSAIoctl(
             raw_sock,
-            SIO_UDP_CONNRESET,
+            ws2::SIO_UDP_CONNRESET,
             &false_val,
             4,
             &mut out_dummy,
@@ -1140,9 +1157,9 @@ fn windows_raw_interface_loop(
         let mut buf = vec![0u8; 65_535];
         let mut ipv4_fragments = Ipv4FragmentAssembler::new();
         loop {
-            let n = recv(raw_sock, buf.as_mut_ptr(), buf.len() as i32, 0);
+            let n = ws2::recv(raw_sock, buf.as_mut_ptr(), buf.len() as i32, 0);
             if n <= 0 {
-                let err = WSAGetLastError();
+                let err = ws2::WSAGetLastError();
                 if is_transient_winsock_error(err) {
                     continue;
                 }
@@ -1174,7 +1191,7 @@ fn windows_raw_interface_loop(
             }
         }
 
-        closesocket(raw_sock);
+        ws2::closesocket(raw_sock);
     }
 }
 
@@ -1184,39 +1201,15 @@ fn windows_raw_v6_interface_loop(
     engine: Arc<Mutex<AnalyzerEngine>>,
     status: Arc<Mutex<CaptureStatus>>,
 ) {
-    #[repr(C)]
-    #[allow(dead_code)]
-    struct SockAddrIn6 {
-        sin6_family: u16,
-        sin6_port: u16,
-        sin6_flowinfo: u32,
-        sin6_addr: [u8; 16],
-        sin6_scope_id: u32,
-    }
-
-    #[link(name = "ws2_32")]
-    extern "system" {
-        fn socket(af: i32, sock_type: i32, protocol: i32) -> usize;
-        fn bind(s: usize, name: *const SockAddrIn6, namelen: i32) -> i32;
-        fn recv(s: usize, buf: *mut u8, len: i32, flags: i32) -> i32;
-        fn closesocket(s: usize) -> i32;
-        fn WSAGetLastError() -> i32;
-    }
-
-    const AF_INET6: i32 = 23;
-    const SOCK_RAW: i32 = 3;
-    const IPPROTO_UDP: i32 = 17;
-    const INVALID_SOCKET: usize = usize::MAX;
-
     let _winsock_guard = UdpSocket::bind("[::]:0");
 
     // SAFETY: Standard Winsock2 IPv6 raw socket calls with valid 28-byte SockAddrIn6 and slice bounds.
     unsafe {
         // On Windows, AF_INET6 SOCK_RAW with IPPROTO_UDP delivers [UDP header (8B) | payload]
         // without needing SIO_RCVALL (which is only valid for IPv4 IPPROTO_IP/ICMP).
-        let raw_sock = socket(AF_INET6, SOCK_RAW, IPPROTO_UDP);
-        if raw_sock == INVALID_SOCKET {
-            let code = WSAGetLastError();
+        let raw_sock = ws2::socket(ws2::AF_INET6, ws2::SOCK_RAW, ws2::IPPROTO_UDP);
+        if raw_sock == ws2::INVALID_SOCKET {
+            let code = ws2::WSAGetLastError();
             if let Ok(mut st) = status.lock() {
                 if st.mode == "initializing" {
                     st.mode = "standby".into();
@@ -1230,21 +1223,21 @@ fn windows_raw_v6_interface_loop(
             return;
         }
 
-        let addr = SockAddrIn6 {
-            sin6_family: AF_INET6 as u16,
+        let addr = ws2::SockAddrIn6 {
+            sin6_family: ws2::AF_INET6 as u16,
             sin6_port: 0,
             sin6_flowinfo: 0,
             sin6_addr: local_ip.octets(),
             sin6_scope_id: 0,
         };
 
-        if bind(
+        if ws2::bind(
             raw_sock,
-            &addr as *const SockAddrIn6,
-            core::mem::size_of::<SockAddrIn6>() as i32,
+            &addr as *const ws2::SockAddrIn6 as *const core::ffi::c_void,
+            core::mem::size_of::<ws2::SockAddrIn6>() as i32,
         ) != 0
         {
-            closesocket(raw_sock);
+            ws2::closesocket(raw_sock);
             return;
         }
 
@@ -1261,9 +1254,9 @@ fn windows_raw_v6_interface_loop(
 
         let mut buf = vec![0u8; 65_535];
         loop {
-            let n = recv(raw_sock, buf.as_mut_ptr(), buf.len() as i32, 0);
+            let n = ws2::recv(raw_sock, buf.as_mut_ptr(), buf.len() as i32, 0);
             if n <= 0 {
-                let err = WSAGetLastError();
+                let err = ws2::WSAGetLastError();
                 if is_transient_winsock_error(err) {
                     continue;
                 }
@@ -1288,7 +1281,7 @@ fn windows_raw_v6_interface_loop(
             }
         }
 
-        closesocket(raw_sock);
+        ws2::closesocket(raw_sock);
     }
 }
 
