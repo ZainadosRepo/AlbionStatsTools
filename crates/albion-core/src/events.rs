@@ -19,34 +19,38 @@ pub const EV_NEW_FURNITURE_ITEM: i16 = 33;
 pub const EV_NEW_JOURNAL_ITEM: i16 = 35;
 pub const EV_HARVEST_FINISHED: i16 = 61;
 pub const EV_TAKE_SILVER: i16 = 62;
+pub const EV_ACTION_ON_BUILDING_FINISHED: i16 = 66;
 pub const EV_UPDATE_MONEY: i16 = 81;
 pub const EV_UPDATE_FAME: i16 = 82;
 pub const EV_UPDATE_RESPEC_POINTS: i16 = 84;
+pub const EV_UPDATE_CURRENCY: i16 = 85;
+pub const EV_UPDATE_FACTION_STANDING: i16 = 86;
 pub const EV_CHARACTER_EQUIPMENT_CHANGED: i16 = 90;
 pub const EV_NEW_LOOT: i16 = 98;
-pub const EV_DIED: i16 = 165;
-pub const EV_TRADE_FINISHED: i16 = 191;
-pub const EV_PARTY_JOINED: i16 = 223;
-pub const EV_PARTY_DISBANDED: i16 = 224;
-pub const EV_PARTY_PLAYER_JOINED: i16 = 225;
-pub const EV_PARTY_PLAYER_LEFT: i16 = 227;
-pub const EV_IN_COMBAT_STATE_UPDATE_ENUM: i16 = 259;
-pub const EV_IN_COMBAT_STATE_UPDATE: i16 = 274;
-pub const EV_OTHER_GRABBED_LOOT: i16 = 275;
-pub const EV_UPDATE_CURRENCY: i16 = 290;
-pub const EV_RECEIVED_GVG_SEASON_POINTS: i16 = 381;
-pub const EV_LOOT_CHEST_OPENED: i16 = 390;
-pub const EV_UPDATE_FACTION_STANDING: i16 = 407;
-pub const EV_MISTS_WISP_CAGE_OPENED: i16 = 501;
-pub const EV_MIGHT_AND_FAVOR_RECEIVED: i16 = 514;
+pub const EV_DIED: i16 = 164;
+pub const EV_TRADE_FINISHED: i16 = 179;
+pub const EV_PARTY_JOINED: i16 = 230;
+pub const EV_PARTY_DISBANDED: i16 = 231;
+pub const EV_PARTY_PLAYER_JOINED: i16 = 232;
+pub const EV_PARTY_PLAYER_LEFT: i16 = 234;
+pub const EV_IN_COMBAT_STATE_UPDATE: i16 = 277;
+pub const EV_OTHER_GRABBED_LOOT: i16 = 278;
+pub const EV_NEW_LOOT_CHEST: i16 = 392;
+pub const EV_UPDATE_LOOT_CHEST: i16 = 393;
+pub const EV_LOOT_CHEST_OPENED: i16 = 394;
+pub const EV_RECEIVED_GVG_SEASON_POINTS: i16 = 432;
+pub const EV_MIGHT_AND_FAVOR_RECEIVED: i16 = 496;
+pub const EV_MISTS_WISP_CAGE_OPENED: i16 = 533;
 
 // OperationCode constants (parameter key 253)
 pub const OP_JOIN: i16 = 2;
-pub const OP_CHANGE_CLUSTER: i16 = 35;
-pub const OP_AUCTION_GET_OFFERS: i16 = 75;
-pub const OP_AUCTION_GET_REQUESTS: i16 = 76;
+pub const OP_CHANGE_CLUSTER: i16 = 41;
+pub const OP_REPAIR_BUILDING_TAKE_MONEY: i16 = 50;
+pub const OP_ACTION_ON_BUILDING_START: i16 = 55;
+pub const OP_AUCTION_GET_OFFERS: i16 = 81;
+pub const OP_AUCTION_GET_REQUESTS: i16 = 82;
 pub const OP_REPAIR_EQUIPMENT_ITEM: i16 = 102;
-pub const OP_READ_MAIL: i16 = 170;
+pub const OP_READ_MAIL: i16 = 176;
 
 /// Damage/heal effect type in `HealthUpdateEvent`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +104,7 @@ pub enum CityFaction {
 }
 
 impl CityFaction {
+    /// Decodes faction standing flags (`UpdateFactionStanding` parameter `0`).
     pub fn from_u8(code: u8) -> Self {
         match code {
             1 => Self::Martlock,
@@ -109,6 +114,43 @@ impl CityFaction {
             5 => Self::Thetford,
             6 => Self::Caerleon,
             _ => Self::Unknown,
+        }
+    }
+
+    pub fn to_standing_u8(self) -> u8 {
+        match self {
+            Self::Unknown => 0,
+            Self::Martlock => 1,
+            Self::Lymhurst => 2,
+            Self::Bridgewatch => 3,
+            Self::FortSterling => 4,
+            Self::Thetford => 5,
+            Self::Caerleon => 6,
+        }
+    }
+
+    /// Decodes city currency types (`UpdateCurrency` parameter `2`).
+    pub fn from_currency_u8(code: u8) -> Self {
+        match code {
+            1 => Self::Lymhurst,
+            2 => Self::Martlock,
+            3 => Self::FortSterling,
+            4 => Self::Bridgewatch,
+            5 => Self::Thetford,
+            6 => Self::Caerleon,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn to_currency_u8(self) -> u8 {
+        match self {
+            Self::Unknown => 0,
+            Self::Lymhurst => 1,
+            Self::Martlock => 2,
+            Self::FortSterling => 3,
+            Self::Bridgewatch => 4,
+            Self::Thetford => 5,
+            Self::Caerleon => 6,
         }
     }
 
@@ -380,9 +422,7 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
         return None;
     }
     let p = &ev.parameters;
-    let event_code = p
-        .get_i16(252)
-        .or_else(|| (ev.code != 0).then_some(ev.code as i16))?;
+    let event_code = p.get_i16(252)?;
 
     match event_code {
         EV_LEAVE => Some(AlbionTelemetryEvent::Leave {
@@ -466,7 +506,8 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
             let item_id = p.get_i32(1)?;
             let quantity = p.get_i32(2).unwrap_or(1);
             let estimated_market_value = p.get_i64(4).unwrap_or(0);
-            let quality_level = p.get_i16(6).unwrap_or(1);
+            let quality_key = if p.get_str(6).is_some() { 7 } else { 6 };
+            let quality_level = p.get_i16(quality_key).unwrap_or(1);
             Some(AlbionTelemetryEvent::NewDiscoveredItem {
                 object_id,
                 item_id,
@@ -487,18 +528,18 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
             object_id: p.get_i64(0)?,
             target_entity_id: p.get_i64(2).unwrap_or(0),
             yield_pre_tax: p.get_fixpoint(3).unwrap_or_default(),
+            cluster_tax: p.get_fixpoint(4).unwrap_or_default(),
             guild_tax: p.get_fixpoint(5).unwrap_or_default(),
-            cluster_tax: p.get_fixpoint(6).unwrap_or_default(),
             is_premium_bonus: p.get_bool(7).unwrap_or(false),
         }),
         EV_UPDATE_MONEY => Some(AlbionTelemetryEvent::UpdateMoney {
-            object_id: p.get_i64(0)?,
+            object_id: p.get_i64(0).unwrap_or(0),
             current_player_silver: p.get_fixpoint(1)?,
         }),
         EV_UPDATE_FAME => Some(AlbionTelemetryEvent::UpdateFame {
             object_id: p.get_i64(0).unwrap_or(0),
             total_player_fame: p.get_fixpoint(1).unwrap_or_default(),
-            fame_with_zone_multiplier: p.get_fixpoint(2)?,
+            fame_with_zone_multiplier: p.get_fixpoint(2).unwrap_or_default(),
             zone_fame: p.get_fixpoint(3).unwrap_or_default(),
             is_premium_bonus: p.get_bool(5).unwrap_or(false),
             satchel_fame: p.get_fixpoint(10).unwrap_or_default(),
@@ -538,15 +579,13 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
         }
         EV_PARTY_JOINED => {
             let party_object_id = p.get_i64(0).unwrap_or(0);
-            let guids = p
-                .get_guid_vec(4)
-                .or_else(|| p.get_guid_vec(5))
-                .unwrap_or_default();
-            let names = p
-                .get_string_vec(5)
-                .or_else(|| p.get_string_vec(6))
-                .unwrap_or_default();
-            let members = guids.into_iter().zip(names).collect();
+            let guids = p.get_guid_vec(8).unwrap_or_default();
+            let names = p.get_string_vec(9).unwrap_or_default();
+            let members = guids
+                .into_iter()
+                .zip(names)
+                .filter(|(guid, name)| *guid != Guid16([0; 16]) && !name.trim().is_empty())
+                .collect();
             Some(AlbionTelemetryEvent::PartyJoined {
                 party_object_id,
                 members,
@@ -564,13 +603,11 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
             party_object_id: p.get_i64(0).unwrap_or(0),
             user_guid: p.get_guid(1)?,
         }),
-        EV_IN_COMBAT_STATE_UPDATE | EV_IN_COMBAT_STATE_UPDATE_ENUM => {
-            Some(AlbionTelemetryEvent::InCombatStateUpdate {
-                object_id: p.get_i64(0)?,
-                in_active_combat: p.get_bool(1).unwrap_or(false),
-                in_passive_combat: p.get_bool(2).unwrap_or(false),
-            })
-        }
+        EV_IN_COMBAT_STATE_UPDATE => Some(AlbionTelemetryEvent::InCombatStateUpdate {
+            object_id: p.get_i64(0)?,
+            in_active_combat: p.get_bool(1).unwrap_or(false),
+            in_passive_combat: p.get_bool(2).unwrap_or(false),
+        }),
         EV_OTHER_GRABBED_LOOT => Some(AlbionTelemetryEvent::OtherGrabbedLoot {
             object_id: p.get_i64(0).unwrap_or(0),
             looted_from_name: p.get_str(1).unwrap_or_default().to_string(),
@@ -580,7 +617,7 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
             quantity: p.get_i32(5).unwrap_or(0),
         }),
         EV_UPDATE_CURRENCY => Some(AlbionTelemetryEvent::UpdateCurrency {
-            city_faction: CityFaction::from_u8(p.get_u8(2).unwrap_or(0)),
+            city_faction: CityFaction::from_currency_u8(p.get_u8(2).unwrap_or(0)),
             gained_faction_coins: p.get_fixpoint(3).unwrap_or_default(),
             faction_rank_points: p.get_fixpoint(4).unwrap_or_default(),
             premium_bonus: p.get_fixpoint(8).unwrap_or_default(),
@@ -595,6 +632,17 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
         EV_RECEIVED_GVG_SEASON_POINTS => Some(AlbionTelemetryEvent::ReceivedGvgSeasonPoints {
             season_points: p.get_i32(1)?,
         }),
+        EV_UPDATE_LOOT_CHEST => {
+            let object_id = p.get_i64(0)?;
+            let is_opened = p.get_i32(1) == Some(7)
+                || (p.get(1).is_none()
+                    && p.get_guid_vec(3).map(|v| !v.is_empty()).unwrap_or(false));
+            if is_opened {
+                Some(AlbionTelemetryEvent::LootChestOpened { object_id })
+            } else {
+                None
+            }
+        }
         EV_LOOT_CHEST_OPENED => Some(AlbionTelemetryEvent::LootChestOpened {
             object_id: p.get_i64(0)?,
         }),
@@ -616,10 +664,18 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
 
 fn decode_operation_request(req: &OperationRequestPayload) -> Option<AlbionTelemetryEvent> {
     let p = &req.parameters;
-    let op_code = p
-        .get_i16(253)
-        .or_else(|| (req.operation_code != 0).then_some(req.operation_code as i16))?;
+    let op_code = p.get_i16(253)?;
     match op_code {
+        OP_ACTION_ON_BUILDING_START => {
+            if p.get_i32(2) == Some(2) {
+                Some(AlbionTelemetryEvent::RepairEquipmentRequest {
+                    slot_id: p.get_i32(1).unwrap_or(0),
+                    repair_cost: p.get_fixpoint(4).unwrap_or_default(),
+                })
+            } else {
+                None
+            }
+        }
         OP_REPAIR_EQUIPMENT_ITEM => Some(AlbionTelemetryEvent::RepairEquipmentRequest {
             slot_id: p.get_i32(0).unwrap_or(0),
             repair_cost: p.get_fixpoint(1).unwrap_or_default(),
@@ -630,30 +686,26 @@ fn decode_operation_request(req: &OperationRequestPayload) -> Option<AlbionTelem
 
 fn decode_operation_response(resp: &OperationResponsePayload) -> Option<AlbionTelemetryEvent> {
     let p = &resp.parameters;
-    let op_code = p
-        .get_i16(253)
-        .or_else(|| (resp.operation_code != 0).then_some(resp.operation_code as i16))?;
+    let op_code = p.get_i16(253)?;
     match op_code {
         OP_JOIN => {
             let user_object_id = p.get_i64(0)?;
             let user_guid = p.get_guid(1).unwrap_or_default();
             let username = p.get_str(2).unwrap_or_default().to_string();
             let map_index = p.get_str(8).unwrap_or_default().to_string();
-            let current_focus_points = p.get_f64(26).unwrap_or(0.0);
-            let max_focus_points = p.get_f64(27).unwrap_or(30_000.0);
-            let silver = p
-                .get_fixpoint(28)
-                .or_else(|| p.get_fixpoint(32))
-                .unwrap_or_default();
-            let gold = p
-                .get_fixpoint(29)
-                .or_else(|| p.get_fixpoint(33))
-                .unwrap_or_default();
-            let learning_points = p.get_fixpoint(36).unwrap_or_default();
-            let reputation = p.get_f64(40).unwrap_or(0.0);
-            let guild_name = p.get_str(57).unwrap_or_default().to_string();
-            let main_map_index = p.get_str(65).unwrap_or_default().to_string();
-            let alliance_name = p.get_str(78).unwrap_or_default().to_string();
+            let current_focus_points = p.get_f64(27).unwrap_or(0.0);
+            let max_focus_points = p.get_f64(28).unwrap_or(30_000.0);
+            let silver = p.get_fixpoint(33).unwrap_or_default();
+            let gold = p.get_fixpoint(34).unwrap_or_default();
+            let learning_points = p.get_fixpoint(37).unwrap_or_default();
+            let reputation = p.get_f64(41).unwrap_or(0.0);
+            let guild_name = p.get_str(58).unwrap_or_default().to_string();
+            let main_map_index = p
+                .get_str(66)
+                .or_else(|| p.get_str(65))
+                .unwrap_or_default()
+                .to_string();
+            let alliance_name = p.get_str(79).unwrap_or_default().to_string();
             let is_respec_active = p.get_bool(98).unwrap_or(false);
             Some(AlbionTelemetryEvent::JoinResponse {
                 user_object_id,
@@ -875,8 +927,8 @@ pub fn encode_telemetry_event_to_photon(event: &AlbionTelemetryEvent) -> PhotonM
             p.insert(0, Protocol16Value::Long(*object_id));
             p.insert(2, Protocol16Value::Long(*target_entity_id));
             p.insert(3, Protocol16Value::Long(yield_pre_tax.raw()));
+            p.insert(4, Protocol16Value::Long(cluster_tax.raw()));
             p.insert(5, Protocol16Value::Long(guild_tax.raw()));
-            p.insert(6, Protocol16Value::Long(cluster_tax.raw()));
             p.insert(7, Protocol16Value::Boolean(*is_premium_bonus));
             p.insert(252, Protocol16Value::Short(EV_TAKE_SILVER));
             PhotonMessage::EventData(EventDataPayload {
@@ -988,7 +1040,7 @@ pub fn encode_telemetry_event_to_photon(event: &AlbionTelemetryEvent) -> PhotonM
         } => {
             p.insert(0, Protocol16Value::Long(*party_object_id));
             p.insert(
-                4,
+                8,
                 Protocol16Value::ObjectArray(
                     members
                         .iter()
@@ -997,7 +1049,7 @@ pub fn encode_telemetry_event_to_photon(event: &AlbionTelemetryEvent) -> PhotonM
                 ),
             );
             p.insert(
-                5,
+                9,
                 Protocol16Value::StringArray(members.iter().map(|(_, n)| n.clone()).collect()),
             );
             p.insert(252, Protocol16Value::Short(EV_PARTY_JOINED));
@@ -1081,18 +1133,7 @@ pub fn encode_telemetry_event_to_photon(event: &AlbionTelemetryEvent) -> PhotonM
             premium_bonus,
             total_player_faction_points,
         } => {
-            p.insert(
-                2,
-                Protocol16Value::Byte(match city_faction {
-                    CityFaction::Martlock => 1,
-                    CityFaction::Lymhurst => 2,
-                    CityFaction::Bridgewatch => 3,
-                    CityFaction::FortSterling => 4,
-                    CityFaction::Thetford => 5,
-                    CityFaction::Caerleon => 6,
-                    CityFaction::Unknown => 0,
-                }),
-            );
+            p.insert(2, Protocol16Value::Byte(city_faction.to_currency_u8()));
             p.insert(3, Protocol16Value::Long(gained_faction_coins.raw()));
             p.insert(4, Protocol16Value::Long(faction_rank_points.raw()));
             p.insert(8, Protocol16Value::Long(premium_bonus.raw()));
@@ -1109,18 +1150,7 @@ pub fn encode_telemetry_event_to_photon(event: &AlbionTelemetryEvent) -> PhotonM
             bonus_premium,
             total_flag_points,
         } => {
-            p.insert(
-                0,
-                Protocol16Value::Byte(match city_faction {
-                    CityFaction::Martlock => 1,
-                    CityFaction::Lymhurst => 2,
-                    CityFaction::Bridgewatch => 3,
-                    CityFaction::FortSterling => 4,
-                    CityFaction::Thetford => 5,
-                    CityFaction::Caerleon => 6,
-                    CityFaction::Unknown => 0,
-                }),
-            );
+            p.insert(0, Protocol16Value::Byte(city_faction.to_standing_u8()));
             p.insert(1, Protocol16Value::Long(gained_flag_points.raw()));
             p.insert(2, Protocol16Value::Long(bonus_premium.raw()));
             p.insert(3, Protocol16Value::Long(total_flag_points.raw()));
@@ -1196,15 +1226,15 @@ pub fn encode_telemetry_event_to_photon(event: &AlbionTelemetryEvent) -> PhotonM
             p.insert(1, Protocol16Value::ByteArray(user_guid.0.to_vec()));
             p.insert(2, Protocol16Value::String(username.clone()));
             p.insert(8, Protocol16Value::String(map_index.clone()));
-            p.insert(26, Protocol16Value::Double(*current_focus_points));
-            p.insert(27, Protocol16Value::Double(*max_focus_points));
-            p.insert(28, Protocol16Value::Long(silver.raw()));
-            p.insert(29, Protocol16Value::Long(gold.raw()));
-            p.insert(36, Protocol16Value::Long(learning_points.raw()));
-            p.insert(40, Protocol16Value::Double(*reputation));
-            p.insert(57, Protocol16Value::String(guild_name.clone()));
-            p.insert(65, Protocol16Value::String(main_map_index.clone()));
-            p.insert(78, Protocol16Value::String(alliance_name.clone()));
+            p.insert(27, Protocol16Value::Double(*current_focus_points));
+            p.insert(28, Protocol16Value::Double(*max_focus_points));
+            p.insert(33, Protocol16Value::Long(silver.raw()));
+            p.insert(34, Protocol16Value::Long(gold.raw()));
+            p.insert(37, Protocol16Value::Long(learning_points.raw()));
+            p.insert(41, Protocol16Value::Double(*reputation));
+            p.insert(58, Protocol16Value::String(guild_name.clone()));
+            p.insert(66, Protocol16Value::String(main_map_index.clone()));
+            p.insert(79, Protocol16Value::String(alliance_name.clone()));
             p.insert(98, Protocol16Value::Boolean(*is_respec_active));
             p.insert(253, Protocol16Value::Short(OP_JOIN));
             PhotonMessage::OperationResponse(OperationResponsePayload {
@@ -1337,5 +1367,263 @@ mod tests {
             .collect();
 
         assert_eq!(decoded, events);
+    }
+
+    #[test]
+    fn roundtrips_take_silver_party_and_faction_mappings_through_protocol18() {
+        let events = vec![
+            AlbionTelemetryEvent::TakeSilver {
+                object_id: 10,
+                target_entity_id: 200,
+                yield_pre_tax: FixPoint::from_f64(10_000.0),
+                guild_tax: FixPoint::from_f64(500.0),
+                cluster_tax: FixPoint::from_f64(250.0),
+                is_premium_bonus: true,
+            },
+            AlbionTelemetryEvent::PartyJoined {
+                party_object_id: 901,
+                members: vec![
+                    (Guid16([0x11; 16]), "Alice".into()),
+                    (Guid16([0x22; 16]), "Bob".into()),
+                ],
+            },
+            AlbionTelemetryEvent::UpdateCurrency {
+                city_faction: CityFaction::FortSterling,
+                gained_faction_coins: FixPoint::from_f64(1200.0),
+                faction_rank_points: FixPoint::from_f64(2400.0),
+                premium_bonus: FixPoint::from_f64(400.0),
+                total_player_faction_points: FixPoint::from_f64(50_000.0),
+            },
+            AlbionTelemetryEvent::UpdateCurrency {
+                city_faction: CityFaction::Bridgewatch,
+                gained_faction_coins: FixPoint::from_f64(800.0),
+                faction_rank_points: FixPoint::from_f64(1600.0),
+                premium_bonus: FixPoint::from_f64(0.0),
+                total_player_faction_points: FixPoint::from_f64(20_000.0),
+            },
+            AlbionTelemetryEvent::UpdateFactionStanding {
+                city_faction: CityFaction::Bridgewatch,
+                gained_flag_points: FixPoint::from_f64(650.0),
+                bonus_premium: FixPoint::from_f64(150.0),
+                total_flag_points: FixPoint::from_f64(12_000.0),
+            },
+        ];
+
+        let photon_msgs: Vec<PhotonMessage> = events
+            .iter()
+            .map(encode_telemetry_event_to_photon)
+            .collect();
+        let udp = build_photon_udp_packet(&photon_msgs, true, false, 11);
+
+        let mut parser = PhotonParser::new();
+        let decoded: Vec<AlbionTelemetryEvent> = parser
+            .parse_udp_payload(&udp)
+            .iter()
+            .filter_map(decode_photon_message)
+            .collect();
+
+        assert_eq!(decoded, events);
+    }
+
+    #[test]
+    fn decodes_party_joined_packed_guids_and_filters_empty_members() {
+        let mut packed = Vec::with_capacity(48);
+        packed.extend_from_slice(&[0xAA; 16]);
+        packed.extend_from_slice(&[0x00; 16]);
+        packed.extend_from_slice(&[0xCC; 16]);
+
+        let mut p = ParameterTable::new();
+        p.insert(0, Protocol16Value::Long(42));
+        p.insert(8, Protocol16Value::ByteArray(packed));
+        p.insert(
+            9,
+            Protocol16Value::StringArray(vec!["Alice".into(), "Ghost".into(), "   ".into()]),
+        );
+        p.insert(252, Protocol16Value::Short(EV_PARTY_JOINED));
+
+        let msg = PhotonMessage::EventData(EventDataPayload {
+            code: 1,
+            parameters: p,
+        });
+        let udp = build_photon_udp_packet(&[msg], false, false, 1);
+        let mut parser = PhotonParser::new();
+        let decoded: Vec<AlbionTelemetryEvent> = parser
+            .parse_udp_payload(&udp)
+            .iter()
+            .filter_map(decode_photon_message)
+            .collect();
+
+        assert_eq!(
+            decoded,
+            vec![AlbionTelemetryEvent::PartyJoined {
+                party_object_id: 42,
+                members: vec![(Guid16([0xAA; 16]), "Alice".into())],
+            }]
+        );
+    }
+
+    #[test]
+    fn decodes_loot_chest_repair_action_shifted_quality_and_rejects_missing_subcodes_or_radar() {
+        // 1. EV_UPDATE_LOOT_CHEST: opened state (7) -> Some
+        let mut p_chest_open = ParameterTable::new();
+        p_chest_open.insert(0, Protocol16Value::Long(7001));
+        p_chest_open.insert(1, Protocol16Value::Integer(7));
+        p_chest_open.insert(252, Protocol16Value::Short(EV_UPDATE_LOOT_CHEST));
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::EventData(EventDataPayload {
+                code: 1,
+                parameters: p_chest_open,
+            })),
+            Some(AlbionTelemetryEvent::LootChestOpened { object_id: 7001 })
+        );
+
+        // 2. EV_UPDATE_LOOT_CHEST: key 1 absent + key 3 has owner guid -> Some
+        let mut p_chest_owner = ParameterTable::new();
+        p_chest_owner.insert(0, Protocol16Value::Long(7002));
+        p_chest_owner.insert(
+            3,
+            Protocol16Value::ObjectArray(vec![Protocol16Value::ByteArray(vec![0x11; 16])]),
+        );
+        p_chest_owner.insert(252, Protocol16Value::Short(EV_UPDATE_LOOT_CHEST));
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::EventData(EventDataPayload {
+                code: 1,
+                parameters: p_chest_owner,
+            })),
+            Some(AlbionTelemetryEvent::LootChestOpened { object_id: 7002 })
+        );
+
+        // 3. EV_UPDATE_LOOT_CHEST: closed state (2) -> None
+        let mut p_chest_closed = ParameterTable::new();
+        p_chest_closed.insert(0, Protocol16Value::Long(7003));
+        p_chest_closed.insert(1, Protocol16Value::Integer(2));
+        p_chest_closed.insert(252, Protocol16Value::Short(EV_UPDATE_LOOT_CHEST));
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::EventData(EventDataPayload {
+                code: 1,
+                parameters: p_chest_closed,
+            })),
+            None
+        );
+
+        // 4. OP_ACTION_ON_BUILDING_START repair (action_type = 2) vs non-repair (1)
+        let mut p_repair = ParameterTable::new();
+        p_repair.insert(1, Protocol16Value::Integer(3));
+        p_repair.insert(2, Protocol16Value::Integer(2));
+        p_repair.insert(4, Protocol16Value::Long(FixPoint::from_f64(1500.0).raw()));
+        p_repair.insert(253, Protocol16Value::Short(OP_ACTION_ON_BUILDING_START));
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::OperationRequest(OperationRequestPayload {
+                operation_code: 1,
+                parameters: p_repair,
+            })),
+            Some(AlbionTelemetryEvent::RepairEquipmentRequest {
+                slot_id: 3,
+                repair_cost: FixPoint::from_f64(1500.0),
+            })
+        );
+
+        let mut p_craft = ParameterTable::new();
+        p_craft.insert(1, Protocol16Value::Integer(3));
+        p_craft.insert(2, Protocol16Value::Integer(1));
+        p_craft.insert(253, Protocol16Value::Short(OP_ACTION_ON_BUILDING_START));
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::OperationRequest(OperationRequestPayload {
+                operation_code: 1,
+                parameters: p_craft,
+            })),
+            None
+        );
+
+        // Legacy OP_REPAIR_EQUIPMENT_ITEM (102) still decodes
+        let mut p_repair_legacy = ParameterTable::new();
+        p_repair_legacy.insert(0, Protocol16Value::Integer(5));
+        p_repair_legacy.insert(1, Protocol16Value::Long(FixPoint::from_f64(900.0).raw()));
+        p_repair_legacy.insert(253, Protocol16Value::Short(OP_REPAIR_EQUIPMENT_ITEM));
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::OperationRequest(OperationRequestPayload {
+                operation_code: 1,
+                parameters: p_repair_legacy,
+            })),
+            Some(AlbionTelemetryEvent::RepairEquipmentRequest {
+                slot_id: 5,
+                repair_cost: FixPoint::from_f64(900.0),
+            })
+        );
+
+        // 5. EV_NEW_EQUIPMENT_ITEM shifted quality when key 6 holds crafter name
+        let mut p_item = ParameterTable::new();
+        p_item.insert(0, Protocol16Value::Long(8888));
+        p_item.insert(1, Protocol16Value::Integer(1004));
+        p_item.insert(2, Protocol16Value::Integer(1));
+        p_item.insert(4, Protocol16Value::Long(250_000));
+        p_item.insert(6, Protocol16Value::String("MasterCrafter".into()));
+        p_item.insert(7, Protocol16Value::Short(4));
+        p_item.insert(252, Protocol16Value::Short(EV_NEW_EQUIPMENT_ITEM));
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::EventData(EventDataPayload {
+                code: 1,
+                parameters: p_item,
+            })),
+            Some(AlbionTelemetryEvent::NewDiscoveredItem {
+                object_id: 8888,
+                item_id: 1004,
+                quantity: 1,
+                estimated_market_value: 250_000,
+                quality_level: 4,
+            })
+        );
+
+        // 6. Missing parameter 252 / 253 must strictly return None even if outer code != 0
+        let mut missing_252 = ParameterTable::new();
+        missing_252.insert(0, Protocol16Value::Long(123));
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::EventData(EventDataPayload {
+                code: EV_LEAVE as u8,
+                parameters: missing_252,
+            })),
+            None
+        );
+        let mut missing_253 = ParameterTable::new();
+        missing_253.insert(0, Protocol16Value::Integer(1));
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::OperationRequest(OperationRequestPayload {
+                operation_code: OP_ACTION_ON_BUILDING_START as u8,
+                parameters: missing_253.clone(),
+            })),
+            None
+        );
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::OperationResponse(
+                OperationResponsePayload {
+                    operation_code: OP_JOIN as u8,
+                    return_code: 0,
+                    debug_message: None,
+                    parameters: missing_253,
+                }
+            )),
+            None
+        );
+
+        // 7. Radar / spawn / movement events remain ignored
+        for code in [500i16, 525, 532] {
+            let mut pr = ParameterTable::new();
+            pr.insert(0, Protocol16Value::Long(999));
+            pr.insert(252, Protocol16Value::Short(code));
+            assert_eq!(
+                decode_photon_message(&PhotonMessage::EventData(EventDataPayload {
+                    code: 1,
+                    parameters: pr,
+                })),
+                None
+            );
+        }
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::EventData(EventDataPayload {
+                code: 3,
+                parameters: ParameterTable::new(),
+            })),
+            None
+        );
     }
 }
