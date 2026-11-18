@@ -1138,41 +1138,51 @@ input[type="number"]:focus {
 }
 
 .slot-img {
+  position: relative;
+  z-index: 1;
   width: 100%;
   height: 100%;
   object-fit: contain;
   border-radius: inherit;
   display: block;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.icon-slot.is-loaded .slot-img,
+.slot-img.is-loaded {
+  opacity: 1;
 }
 
 .slot-fallback-svg {
-  display: none;
+  position: absolute;
   width: 60%;
   height: 60%;
   color: var(--text-muted);
+  pointer-events: none;
 }
 
-.icon-slot.is-fallback .slot-fallback-svg {
-  display: block;
+.icon-slot.is-loaded .slot-fallback-svg {
+  display: none;
 }
 
 .icon-slot.is-fallback .slot-img {
   display: none;
 }
 
-.spell-cat-attack.is-fallback .slot-fallback-svg {
+.spell-cat-attack .slot-fallback-svg {
   color: var(--accent);
 }
 
-.spell-cat-damage.is-fallback .slot-fallback-svg {
+.spell-cat-damage .slot-fallback-svg {
   color: var(--dmg);
 }
 
-.spell-cat-heal.is-fallback .slot-fallback-svg {
+.spell-cat-heal .slot-fallback-svg {
   color: var(--heal);
 }
 
-.spell-cat-buff.is-fallback .slot-fallback-svg {
+.spell-cat-buff .slot-fallback-svg {
   color: var(--taken);
 }
 
@@ -1211,6 +1221,7 @@ input[type="number"]:focus {
 
 .tier-chip {
   position: absolute;
+  z-index: 2;
   top: -4px;
   right: -5px;
   font-family: var(--font-mono);
@@ -1246,6 +1257,7 @@ input[type="number"]:focus {
 
 .ench-dot {
   position: absolute;
+  z-index: 2;
   bottom: 2px;
   right: 2px;
   width: 5px;
@@ -2580,6 +2592,271 @@ input[type="number"]:focus {
 }
 
 /* =========================================================================
+   SESSION INSPECTOR (TAB 2)
+   ========================================================================= */
+
+.session-layout {
+  display: grid;
+  grid-template-columns: minmax(250px, 310px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.session-sidebar-panel {
+  min-width: 0;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 68vh;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.session-list-item {
+  width: 100%;
+  text-align: left;
+  background: var(--bg-row);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.session-list-item:hover {
+  background: var(--bg-row-hover);
+  border-color: var(--border-default);
+}
+
+.session-list-item.is-selected {
+  border-color: var(--accent-border);
+  background: rgba(223, 176, 92, 0.08);
+}
+
+.session-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-list-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-list-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.session-list-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.session-inspector-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.session-inspector-banner {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.session-inspector-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.session-inspector-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-inspector-heading h2 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.session-inspector-sub {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.session-legacy-note {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(223, 176, 92, 0.35);
+  background: rgba(223, 176, 92, 0.08);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.session-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.session-subtabs .seg-btn {
+  gap: 5px;
+}
+
+.subtab-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+}
+
+.seg-btn.active .subtab-count {
+  background: rgba(223, 176, 92, 0.2);
+  color: var(--accent-bright);
+}
+
+.session-section-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.session-gathering-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(98px, 1fr));
+  gap: 6px;
+}
+
+.session-gat-pill {
+  background: var(--bg-row);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.session-gat-pill .gat-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.session-gat-pill .gat-kind .ico {
+  color: var(--accent);
+}
+
+.session-gat-pill strong {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-main);
+}
+
+.session-combat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-combat-item {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-row);
+  overflow: hidden;
+}
+
+.session-combat-summary {
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+}
+
+.session-combat-summary:hover {
+  background: var(--bg-row-hover);
+}
+
+.session-combat-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.session-combat-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.session-spell-drawer {
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(10, 12, 16, 0.45);
+  padding: 6px 10px;
+}
+
+.session-expand-hint {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+/* =========================================================================
    COMPACT LAYOUT MODE & FLUID SMALL-WINDOW RESPONSIVENESS (360px -> 4K)
    Never hides page navigation; progressively compacts labels so nothing clips!
    ========================================================================= */
@@ -2618,7 +2895,8 @@ input[type="number"]:focus {
 }
 
 .app-shell.compact-layout .combat-grid,
-.app-shell.compact-layout .economy-grid {
+.app-shell.compact-layout .economy-grid,
+.app-shell.compact-layout .session-layout {
   grid-template-columns: 1fr;
 }
 
@@ -2631,8 +2909,13 @@ input[type="number"]:focus {
 
 @media (max-width: 920px) {
   .combat-grid,
-  .economy-grid {
+  .economy-grid,
+  .session-layout {
     grid-template-columns: 1fr;
+  }
+
+  .session-list {
+    max-height: 220px;
   }
 
   .pill-seg-player,

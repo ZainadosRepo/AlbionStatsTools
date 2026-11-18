@@ -2,7 +2,10 @@
 //! plus importer for public `ao-bin-dumps` (`formatted/items.json`) metadata.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::OnceLock;
+
+const EMBEDDED_SPELLS_I18N: &str = include_str!("../../../data/spells_i18n.json");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +72,8 @@ pub struct RawCatalog {
     pub clusters: Vec<ClusterEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recipes: Vec<CraftingRecipe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weapon_spells: Vec<(i32, i32, u8)>,
 }
 
 type CompactRecipeTuple = (u32, u32, i64, Vec<(usize, u32, u8)>);
@@ -79,6 +84,14 @@ struct CompactRecipesDoc {
     recipes: HashMap<String, CompactRecipeTuple>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct RawCraftSpellList {
+    subcategory: String,
+    reference: Option<String>,
+    adds: Vec<String>,
+    removes: Vec<String>,
+}
+
 /// Fast `O(1)` lookup catalog for items, spells, clusters, recipes, and weapon inference.
 #[derive(Debug, Clone)]
 pub struct Catalog {
@@ -86,9 +99,12 @@ pub struct Catalog {
     items_by_index: HashMap<i32, ItemEntry>,
     items_by_unique: HashMap<String, i32>,
     spells_by_index: HashMap<i32, SpellEntry>,
-    weapon_by_spell: HashMap<i32, i32>,
+    spell_indices_by_unique: HashMap<String, Vec<i32>>,
+    weapon_by_spell: HashMap<i32, (i32, u8)>,
     clusters_by_index: HashMap<String, ClusterEntry>,
     recipes_by_unique: HashMap<String, CraftingRecipe>,
+    spell_triggers: HashMap<String, Vec<String>>,
+    raw_mainhand_csl: HashMap<String, RawCraftSpellList>,
 }
 
 /// Shape of entries inside `ao-bin-dumps/formatted/items.json`.
@@ -111,6 +127,100 @@ struct AoBinDumpWorld {
     unique_name: String,
 }
 
+fn spells_i18n_map() -> &'static HashMap<String, (String, String)> {
+    static MAP: OnceLock<HashMap<String, (String, String)>> = OnceLock::new();
+    MAP.get_or_init(|| {
+        let parsed: HashMap<String, [String; 2]> =
+            serde_json::from_str(EMBEDDED_SPELLS_I18N).unwrap_or_default();
+        parsed
+            .into_iter()
+            .filter_map(|(k, [fr, en])| {
+                let fr_t = fr.trim();
+                let en_t = en.trim();
+                let valid = !fr_t.is_empty()
+                    && !en_t.is_empty()
+                    && fr_t.len() <= 90
+                    && en_t.len() <= 90
+                    && !fr_t.contains(['\n', '\r', '$', '{', '}', '[', ']', '§'])
+                    && !en_t.contains(['\n', '\r', '$', '{', '}', '[', ']', '§']);
+                valid.then(|| (k.to_ascii_uppercase(), (fr_t.to_string(), en_t.to_string())))
+            })
+            .collect()
+    })
+}
+
+fn lookup_i18n_with_suffix_strip(
+    map: &HashMap<String, (String, String)>,
+    ident: &str,
+) -> Option<(String, String)> {
+    let mut stem = ident.trim().to_ascii_uppercase();
+    if stem.is_empty() {
+        return None;
+    }
+    if let Some(pair) = map.get(&format!("@SPELLS_{stem}")) {
+        return Some(pair.clone());
+    }
+    while let Some((prefix, _suffix)) = stem.rsplit_once('_') {
+        if prefix.is_empty() {
+            break;
+        }
+        if let Some(pair) = map.get(&format!("@SPELLS_{prefix}")) {
+            return Some(pair.clone());
+        }
+        stem = prefix.to_string();
+    }
+    None
+}
+
+fn resolve_spell_i18n(
+    unique_name: &str,
+    name_loca_tag: Option<&str>,
+    ui_sprite: Option<&str>,
+) -> (String, String) {
+    let map = spells_i18n_map();
+
+    if let Some(tag) = name_loca_tag {
+        let t = tag.trim().to_ascii_uppercase();
+        if !t.is_empty() {
+            if let Some((fr, en)) = map.get(&t) {
+                return (fr.clone(), en.clone());
+            }
+            if !t.starts_with("@SPELLS_") {
+                if let Some((fr, en)) = map.get(&format!("@SPELLS_{t}")) {
+                    return (fr.clone(), en.clone());
+                }
+            }
+        }
+    }
+
+    let up_name = unique_name.trim().to_ascii_uppercase();
+    if let Some((fr, en)) = map.get(&format!("@SPELLS_{up_name}")) {
+        return (fr.clone(), en.clone());
+    }
+
+    if let Some(sprite) = ui_sprite {
+        let up_sprite = sprite.trim().to_ascii_uppercase();
+        if !up_sprite.is_empty() {
+            if let Some((fr, en)) = map.get(&format!("@SPELLS_{up_sprite}")) {
+                return (fr.clone(), en.clone());
+            }
+        }
+    }
+
+    if let Some(pair) = lookup_i18n_with_suffix_strip(map, &up_name) {
+        return pair;
+    }
+
+    if let Some(sprite) = ui_sprite {
+        if let Some(pair) = lookup_i18n_with_suffix_strip(map, sprite) {
+            return pair;
+        }
+    }
+
+    let readable = humanize_spell_identifier(unique_name);
+    (readable.clone(), readable)
+}
+
 impl Catalog {
     pub fn from_json_str(json: &str) -> Result<Self, String> {
         let raw: RawCatalog = serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -120,20 +230,36 @@ impl Catalog {
     pub fn from_raw(raw: RawCatalog) -> Self {
         let mut items_by_index = HashMap::with_capacity(raw.items.len());
         let mut items_by_unique = HashMap::with_capacity(raw.items.len());
-        let mut weapon_by_spell = HashMap::new();
 
         for item in raw.items {
-            if item.slot == "mainHand" {
-                for &sp in &item.spell_ids {
-                    weapon_by_spell.entry(sp).or_insert(item.index);
-                }
-            }
             items_by_unique.insert(item.unique_name.clone(), item.index);
             items_by_index.insert(item.index, item);
         }
 
         let mut spells_by_index = HashMap::with_capacity(raw.spells.len());
-        for spell in raw.spells {
+        let mut spell_indices_by_unique: HashMap<String, Vec<i32>> =
+            HashMap::with_capacity(raw.spells.len());
+        for mut spell in raw.spells {
+            let humanized = humanize_spell_identifier(&spell.unique_name);
+            let needs_heal = spell.name_fr.trim().is_empty()
+                || spell.name_fr == spell.name_en
+                || spell.name_fr == humanized;
+            if needs_heal {
+                let (fr, en) =
+                    resolve_spell_i18n(&spell.unique_name, None, spell.ui_sprite.as_deref());
+                if fr != en || spell.name_fr.trim().is_empty() {
+                    spell.name_fr = fr;
+                    if spell.name_en == humanized || spell.name_en.trim().is_empty() {
+                        spell.name_en = en;
+                    }
+                }
+            }
+            if !spell.unique_name.is_empty() {
+                spell_indices_by_unique
+                    .entry(spell.unique_name.to_ascii_uppercase())
+                    .or_default()
+                    .push(spell.index);
+            }
             spells_by_index.insert(spell.index, spell);
         }
 
@@ -147,15 +273,32 @@ impl Catalog {
             recipes_by_unique.insert(rec.item_unique_name.clone(), rec);
         }
 
-        Self {
+        let mut catalog = Self {
             version: raw.version,
             items_by_index,
             items_by_unique,
             spells_by_index,
-            weapon_by_spell,
+            spell_indices_by_unique,
+            weapon_by_spell: HashMap::new(),
             clusters_by_index,
             recipes_by_unique,
+            spell_triggers: HashMap::new(),
+            raw_mainhand_csl: HashMap::new(),
+        };
+
+        for (spell_idx, item_idx, spec) in raw.weapon_spells {
+            if catalog.items_by_index.contains_key(&item_idx) && spec > 0 {
+                let replace = catalog
+                    .weapon_by_spell
+                    .get(&spell_idx)
+                    .is_none_or(|&(_, cur_spec)| spec > cur_spec);
+                if replace {
+                    catalog.weapon_by_spell.insert(spell_idx, (item_idx, spec));
+                }
+            }
         }
+        catalog.rebuild_embedded_item_spell_bindings();
+        catalog
     }
 
     pub fn item(&self, index: i32) -> Option<&ItemEntry> {
@@ -226,8 +369,37 @@ impl Catalog {
     /// Infers a player's main-hand weapon from an observed spell cast (`ActiveSpellEffectsUpdate`)
     /// without needing a full character inspect first.
     pub fn infer_weapon_from_spell(&self, spell_index: i32) -> Option<&ItemEntry> {
-        let item_idx = self.weapon_by_spell.get(&spell_index)?;
+        let (item_idx, _) = self.weapon_by_spell.get(&spell_index)?;
         self.items_by_index.get(item_idx)
+    }
+
+    /// Infers a player's main-hand weapon along with its specificity tier (`1` = shared tree skill,
+    /// `2` = narrow sub-group skill, `3` = signature weapon skill).
+    pub fn infer_weapon_from_spell_with_specificity(
+        &self,
+        spell_index: i32,
+    ) -> Option<(&ItemEntry, u8)> {
+        let (item_idx, spec) = self.weapon_by_spell.get(&spell_index)?;
+        self.items_by_index.get(item_idx).map(|item| (item, *spec))
+    }
+
+    /// Chooses the highest-specificity main-hand weapon inferred across a set of spell indices.
+    pub fn infer_best_weapon_from_spells(&self, spell_indices: &[i32]) -> Option<(&ItemEntry, u8)> {
+        let mut best: Option<(&ItemEntry, u8)> = None;
+        for &sp in spell_indices {
+            if let Some((item, spec)) = self.infer_weapon_from_spell_with_specificity(sp) {
+                let replace = match best {
+                    None => true,
+                    Some((cur_item, cur_spec)) => {
+                        spec > cur_spec || (spec == cur_spec && item.index < cur_item.index)
+                    }
+                };
+                if replace {
+                    best = Some((item, spec));
+                }
+            }
+        }
+        best
     }
 
     pub fn cluster(&self, index: &str) -> Option<&ClusterEntry> {
@@ -248,6 +420,10 @@ impl Catalog {
 
     pub fn recipe_count(&self) -> usize {
         self.recipes_by_unique.len()
+    }
+
+    pub fn weapon_spell_count(&self) -> usize {
+        self.weapon_by_spell.len()
     }
 
     /// Looks up the exact crafting recipe for an item `UniqueName` (e.g. `T8_2H_BOW_KEEPER@2`),
@@ -318,7 +494,8 @@ impl Catalog {
         Ok(loaded)
     }
 
-    /// Exports the full catalog (including merged `ao-bin-dumps` items, spells, clusters, and recipes) for disk caching.
+    /// Exports the full catalog (including merged `ao-bin-dumps` items, spells, clusters, recipes,
+    /// and inferred weapon-spell bindings) for disk caching.
     pub fn export_raw(&self) -> RawCatalog {
         let mut items: Vec<ItemEntry> = self.items_by_index.values().cloned().collect();
         items.sort_by_key(|i| i.index);
@@ -328,12 +505,229 @@ impl Catalog {
         clusters.sort_by(|a, b| a.index.cmp(&b.index));
         let mut recipes: Vec<CraftingRecipe> = self.recipes_by_unique.values().cloned().collect();
         recipes.sort_by(|a, b| a.item_unique_name.cmp(&b.item_unique_name));
+        let mut weapon_spells: Vec<(i32, i32, u8)> = self
+            .weapon_by_spell
+            .iter()
+            .map(|(&sp, &(item, spec))| (sp, item, spec))
+            .collect();
+        weapon_spells.sort_by_key(|&(sp, _, _)| sp);
         RawCatalog {
             version: self.version.clone(),
             items,
             spells,
             clusters,
             recipes,
+            weapon_spells,
+        }
+    }
+
+    /// Backfills any starter clusters, items, spells, or weapon-spell bindings present in
+    /// `fallback` (the embedded catalog) when restoring an older disk cache.
+    pub fn merge_missing_defaults(&mut self, fallback: &Catalog) {
+        for (idx, item) in &fallback.items_by_index {
+            if !self.items_by_index.contains_key(idx) {
+                self.items_by_unique
+                    .entry(item.unique_name.clone())
+                    .or_insert(*idx);
+                self.items_by_index.insert(*idx, item.clone());
+            }
+        }
+        for (idx, cluster) in &fallback.clusters_by_index {
+            match self.clusters_by_index.get_mut(idx) {
+                None => {
+                    self.clusters_by_index.insert(idx.clone(), cluster.clone());
+                }
+                Some(existing)
+                    if existing.name_fr.trim().is_empty()
+                        || existing.name_fr.starts_with("Zone ") =>
+                {
+                    *existing = cluster.clone();
+                }
+                _ => {}
+            }
+        }
+        for (idx, spell) in &fallback.spells_by_index {
+            if !self.spells_by_index.contains_key(idx) {
+                if !spell.unique_name.is_empty() {
+                    let list = self
+                        .spell_indices_by_unique
+                        .entry(spell.unique_name.to_ascii_uppercase())
+                        .or_default();
+                    if !list.contains(idx) {
+                        list.push(*idx);
+                    }
+                }
+                self.spells_by_index.insert(*idx, spell.clone());
+            }
+        }
+        for (&sp_idx, &(item_idx, spec)) in &fallback.weapon_by_spell {
+            if self.items_by_index.contains_key(&item_idx) {
+                let replace = self
+                    .weapon_by_spell
+                    .get(&sp_idx)
+                    .is_none_or(|&(_, cur_spec)| spec > cur_spec);
+                if replace {
+                    self.weapon_by_spell.insert(sp_idx, (item_idx, spec));
+                }
+            }
+        }
+    }
+
+    fn rebuild_embedded_item_spell_bindings(&mut self) {
+        let mut spell_archetypes: HashMap<i32, HashSet<String>> = HashMap::new();
+        let mut candidates: Vec<(i32, &ItemEntry)> = Vec::new();
+        for item in self.items_by_index.values() {
+            if item.slot == "mainHand" && !item.spell_ids.is_empty() {
+                let arch = strip_tier_and_enchant(&item.unique_name).to_string();
+                for &sp in &item.spell_ids {
+                    spell_archetypes.entry(sp).or_default().insert(arch.clone());
+                    candidates.push((sp, item));
+                }
+            }
+        }
+        let mut sorted: Vec<(i32, i32, u8)> = Vec::new();
+        for (sp, item) in candidates {
+            let count = spell_archetypes.get(&sp).map_or(1, HashSet::len);
+            let spec = specificity_from_archetype_count(count);
+            sorted.push((sp, item.index, spec));
+        }
+        sorted.sort_by_key(|&(sp, idx, _)| (sp, idx));
+        for (sp, idx, spec) in sorted {
+            let replace = self
+                .weapon_by_spell
+                .get(&sp)
+                .is_none_or(|&(_, cur_spec)| spec > cur_spec);
+            if replace {
+                self.weapon_by_spell.insert(sp, (idx, spec));
+            }
+        }
+    }
+
+    pub fn rebuild_weapon_bindings(&mut self) {
+        self.weapon_by_spell.clear();
+        self.rebuild_embedded_item_spell_bindings();
+
+        if self.raw_mainhand_csl.is_empty() || self.spell_indices_by_unique.is_empty() {
+            return;
+        }
+
+        // Resolve <craftingspelllist reference="..." /> inheritance into base spells per weapon.
+        let mut resolved_base_spells: HashMap<String, (String, Vec<String>)> = HashMap::new();
+        for uid in self.raw_mainhand_csl.keys() {
+            let mut visited = HashSet::new();
+            let (subcat, spells) = resolve_csl_chain(uid, &self.raw_mainhand_csl, &mut visited);
+            if !spells.is_empty() {
+                resolved_base_spells.insert(uid.clone(), (subcat, spells));
+            }
+        }
+
+        // Pick one representative ItemEntry per canonical weapon archetype (preferred tier 6 or 4, @0).
+        let mut rep_by_archetype: HashMap<String, &ItemEntry> = HashMap::new();
+        for item in self.items_by_index.values() {
+            if item.slot != "mainHand" {
+                continue;
+            }
+            let base_uid = item
+                .unique_name
+                .split('@')
+                .next()
+                .unwrap_or(&item.unique_name);
+            if !resolved_base_spells.contains_key(base_uid) {
+                continue;
+            }
+            let arch = strip_tier_and_enchant(&item.unique_name).to_string();
+            let replace = rep_by_archetype
+                .get(&arch)
+                .is_none_or(|cur| item_rep_rank(item) < item_rep_rank(cur));
+            if replace {
+                rep_by_archetype.insert(arch, item);
+            }
+        }
+
+        // Map each spell index -> list of (subcat, archetype, item_index, hop_distance, arch_rank).
+        #[allow(clippy::type_complexity)]
+        let mut candidates: HashMap<
+            i32,
+            Vec<(String, String, i32, u8, (u8, usize, u32, i32))>,
+        > = HashMap::new();
+
+        for (arch, rep_item) in &rep_by_archetype {
+            let base_uid = rep_item
+                .unique_name
+                .split('@')
+                .next()
+                .unwrap_or(&rep_item.unique_name);
+            let Some((subcat, direct_spells)) = resolved_base_spells.get(base_uid) else {
+                continue;
+            };
+            let arch_rank = archetype_canonical_rank(arch, rep_item);
+            let mut bfs_visited: HashSet<String> = HashSet::new();
+            let mut queue: VecDeque<(String, u8)> = VecDeque::new();
+            for sp_name in direct_spells {
+                let up = sp_name.trim().to_ascii_uppercase();
+                if up.is_empty() || up == "AUTO_ATTACK" {
+                    continue;
+                }
+                if bfs_visited.insert(up.clone()) {
+                    queue.push_back((up, 0));
+                }
+            }
+
+            while let Some((cur_name, dist)) = queue.pop_front() {
+                if let Some(indices) = self.spell_indices_by_unique.get(&cur_name) {
+                    for &sp_idx in indices {
+                        if sp_idx <= 0 {
+                            continue;
+                        }
+                        candidates.entry(sp_idx).or_default().push((
+                            subcat.clone(),
+                            arch.clone(),
+                            rep_item.index,
+                            dist,
+                            arch_rank,
+                        ));
+                    }
+                }
+                if dist >= 4 {
+                    continue;
+                }
+                if let Some(children) = self.spell_triggers.get(&cur_name) {
+                    for child in children {
+                        if !is_generic_non_weapon_spell(child) && bfs_visited.insert(child.clone())
+                        {
+                            queue.push_back((child.clone(), dist + 1));
+                        }
+                    }
+                }
+            }
+        }
+
+        for (sp_idx, entries) in candidates {
+            let mut distinct_subcats: HashSet<&str> = HashSet::new();
+            let mut distinct_archs: HashSet<&str> = HashSet::new();
+            for (subcat, arch, _, _, _) in &entries {
+                if !subcat.is_empty() {
+                    distinct_subcats.insert(subcat.as_str());
+                }
+                distinct_archs.insert(arch.as_str());
+            }
+            // Reject generic debuffs/procs shared across multiple unrelated weapon trees.
+            if distinct_subcats.len() > 1 {
+                continue;
+            }
+            let spec = specificity_from_archetype_count(distinct_archs.len());
+            if let Some((_, _, item_idx, _, _)) = entries
+                .iter()
+                .min_by_key(|entry| (entry.4, entry.3, entry.2))
+            {
+                let replace = self
+                    .weapon_by_spell
+                    .get(&sp_idx)
+                    .is_none_or(|&(_, cur_spec)| spec > cur_spec);
+                if replace {
+                    self.weapon_by_spell.insert(sp_idx, (*item_idx, spec));
+                }
+            }
         }
     }
 
@@ -346,7 +740,7 @@ impl Catalog {
             let Ok(index) = row.index.parse::<i32>() else {
                 continue;
             };
-            if row.unique_name.is_empty() || self.items_by_index.contains_key(&index) {
+            if row.unique_name.is_empty() {
                 continue;
             }
             let names = row.localized_names.unwrap_or_default();
@@ -360,6 +754,24 @@ impl Catalog {
                 .unwrap_or_else(|| name_en.clone());
             let (tier, enchantment) = parse_tier_and_enchant(&row.unique_name);
             let slot = infer_slot_from_unique_name(&row.unique_name);
+
+            if let Some(existing) = self.items_by_index.get_mut(&index) {
+                let old_uid = std::mem::replace(&mut existing.unique_name, row.unique_name.clone());
+                let same_uid = old_uid == row.unique_name;
+                if !same_uid {
+                    self.items_by_unique.remove(&old_uid);
+                    existing.spell_ids.clear();
+                    existing.item_value = (tier as i64) * 160 * (1 << enchantment);
+                }
+                existing.name_fr = name_fr;
+                existing.name_en = name_en;
+                existing.slot = slot;
+                existing.tier = tier;
+                existing.enchantment = enchantment;
+                self.items_by_unique.insert(row.unique_name, index);
+                continue;
+            }
+
             let item = ItemEntry {
                 index,
                 unique_name: row.unique_name.clone(),
@@ -386,7 +798,7 @@ impl Catalog {
         for row in entries {
             let idx = row.index.trim();
             let name = row.unique_name.trim();
-            if idx.is_empty() || name.is_empty() || self.clusters_by_index.contains_key(idx) {
+            if idx.is_empty() || name.is_empty() {
                 continue;
             }
             let kind = if idx.contains("MISTS") || name.to_uppercase().contains("MIST") {
@@ -400,6 +812,16 @@ impl Catalog {
             } else {
                 "openWorld"
             };
+            if let Some(existing) = self.clusters_by_index.get_mut(idx) {
+                let is_placeholder =
+                    existing.name_fr.trim().is_empty() || existing.name_fr.starts_with("Zone ");
+                if is_placeholder {
+                    existing.name_fr = name.to_string();
+                    existing.name_en = name.to_string();
+                    existing.kind = kind.into();
+                }
+                continue;
+            }
             let cluster = ClusterEntry {
                 index: idx.to_string(),
                 name_fr: name.to_string(),
@@ -471,6 +893,8 @@ impl Catalog {
 
             let unique_name = extract_xml_attr(open_tag_slice, "uniquename").unwrap_or_default();
             let ui_sprite = extract_xml_attr(open_tag_slice, "uisprite").filter(|s| !s.is_empty());
+            let name_loca_tag =
+                extract_xml_attr(open_tag_slice, "namelocatag").filter(|s| !s.is_empty());
             let raw_cat = extract_xml_attr(open_tag_slice, "category")
                 .or_else(|| extract_xml_attr(open_tag_slice, "uitype"))
                 .unwrap_or_else(|| "damage".into());
@@ -478,20 +902,33 @@ impl Catalog {
             let cur_idx = spell_index;
             spell_index += 1;
 
-            if !unique_name.is_empty() && !self.spells_by_index.contains_key(&cur_idx) {
-                let readable = humanize_spell_identifier(&unique_name);
-                self.spells_by_index.insert(
-                    cur_idx,
-                    SpellEntry {
-                        index: cur_idx,
-                        unique_name: unique_name.clone(),
-                        name_fr: readable.clone(),
-                        name_en: readable,
-                        category: normalize_spell_category(&raw_cat),
-                        ui_sprite: ui_sprite.clone(),
-                    },
-                );
-                added += 1;
+            let (resolved_fr, resolved_en) = if !unique_name.is_empty() {
+                resolve_spell_i18n(&unique_name, name_loca_tag.as_deref(), ui_sprite.as_deref())
+            } else {
+                (String::new(), String::new())
+            };
+
+            if !unique_name.is_empty()
+                && (!self.spells_by_index.contains_key(&cur_idx) || cur_idx > 0)
+            {
+                let was_absent = !self.spells_by_index.contains_key(&cur_idx);
+                let up_name = unique_name.to_ascii_uppercase();
+                let entry = SpellEntry {
+                    index: cur_idx,
+                    unique_name: unique_name.clone(),
+                    name_fr: resolved_fr.clone(),
+                    name_en: resolved_en.clone(),
+                    category: normalize_spell_category(&raw_cat),
+                    ui_sprite: ui_sprite.clone(),
+                };
+                self.spells_by_index.insert(cur_idx, entry);
+                let indices = self.spell_indices_by_unique.entry(up_name).or_default();
+                if !indices.contains(&cur_idx) {
+                    indices.push(cur_idx);
+                }
+                if was_absent {
+                    added += 1;
+                }
             }
 
             let after_open = tag_start + 1 + rel_gt + 1;
@@ -503,23 +940,39 @@ impl Catalog {
             let close_pat = format!("</{tag_name}>");
             if let Some(rel_close) = clean[after_open..].find(&close_pat) {
                 let inner = &clean[after_open..after_open + rel_close];
+                if !unique_name.is_empty() {
+                    let triggered = extract_spell_trigger_refs(inner);
+                    if !triggered.is_empty() {
+                        self.spell_triggers
+                            .insert(unique_name.to_ascii_uppercase(), triggered);
+                    }
+                }
                 if tag_name == "activespell" && inner.contains("<channelingspell") {
                     let chan_idx = spell_index;
                     spell_index += 1;
-                    if !unique_name.is_empty() && !self.spells_by_index.contains_key(&chan_idx) {
-                        let readable = humanize_spell_identifier(&unique_name);
+                    if !unique_name.is_empty()
+                        && (!self.spells_by_index.contains_key(&chan_idx) || chan_idx > 0)
+                    {
+                        let was_absent = !self.spells_by_index.contains_key(&chan_idx);
+                        let up_name = unique_name.to_ascii_uppercase();
                         self.spells_by_index.insert(
                             chan_idx,
                             SpellEntry {
                                 index: chan_idx,
                                 unique_name: unique_name.clone(),
-                                name_fr: format!("{readable} (Canal.)"),
-                                name_en: format!("{readable} (Channel)"),
+                                name_fr: format!("{resolved_fr} (Canal.)"),
+                                name_en: format!("{resolved_en} (Channel)"),
                                 category: normalize_spell_category(&raw_cat),
                                 ui_sprite,
                             },
                         );
-                        added += 1;
+                        let indices = self.spell_indices_by_unique.entry(up_name).or_default();
+                        if !indices.contains(&chan_idx) {
+                            indices.push(chan_idx);
+                        }
+                        if was_absent {
+                            added += 1;
+                        }
                     }
                 }
                 pos = after_open + rel_close + close_pat.len();
@@ -528,6 +981,7 @@ impl Catalog {
             }
         }
 
+        self.rebuild_weapon_bindings();
         Ok(added)
     }
 
@@ -596,6 +1050,16 @@ impl Catalog {
             }
 
             let unique_name = extract_xml_attr(open_slice, "uniquename").unwrap_or_default();
+            let slot_attr = extract_xml_attr(open_slice, "slottype");
+            let subcat_attr = extract_xml_attr(open_slice, "shopsubcategory1")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let is_mainhand_tag = tag_name == "weapon"
+                || tag_name == "transformationweapon"
+                || (tag_name == "equipmentitem"
+                    && slot_attr
+                        .as_deref()
+                        .is_some_and(|s| s.eq_ignore_ascii_case("mainhand")));
             if let Some(iv_str) = extract_xml_attr(open_slice, "itemvalue") {
                 if let Ok(iv) = iv_str.parse::<f64>() {
                     if !unique_name.is_empty() {
@@ -621,15 +1085,36 @@ impl Catalog {
                 continue;
             }
 
-            let (base_body, ench_body) = if let Some(ench_pos) = body.find("<enchantments") {
-                let end_ench = body[ench_pos..]
-                    .find("</enchantments>")
-                    .map(|e| ench_pos + e + "</enchantments>".len())
-                    .unwrap_or(body.len());
-                (&body[..ench_pos], Some(&body[ench_pos..end_ench]))
-            } else {
-                (body, None)
-            };
+            let (base_body, post_ench_body, ench_body) =
+                if let Some(ench_pos) = body.find("<enchantments") {
+                    let end_ench = body[ench_pos..]
+                        .find("</enchantments>")
+                        .map(|e| ench_pos + e + "</enchantments>".len())
+                        .unwrap_or(body.len());
+                    (
+                        &body[..ench_pos],
+                        &body[end_ench..],
+                        Some(&body[ench_pos..end_ench]),
+                    )
+                } else {
+                    (body, "", None)
+                };
+
+            if is_mainhand_tag {
+                if let Some((reference, adds, removes)) = extract_craftingspelllist(base_body)
+                    .or_else(|| extract_craftingspelllist(post_ench_body))
+                {
+                    self.raw_mainhand_csl.insert(
+                        unique_name.clone(),
+                        RawCraftSpellList {
+                            subcategory: subcat_attr,
+                            reference,
+                            adds,
+                            removes,
+                        },
+                    );
+                }
+            }
 
             if let Some(rec) = extract_first_crafting_req(base_body) {
                 raw_recipes.insert(unique_name.clone(), rec);
@@ -742,11 +1227,230 @@ impl Catalog {
             upserted += 1;
         }
 
+        self.rebuild_weapon_bindings();
         Ok(upserted)
     }
 }
 
 type ParsedRawRecipe = (u32, u32, Vec<(String, u32, bool)>);
+
+fn strip_tier_and_enchant(unique_name: &str) -> &str {
+    let base = unique_name.split('@').next().unwrap_or(unique_name);
+    let b = base.as_bytes();
+    if b.len() >= 4 && b[0] == b'T' && b[1].is_ascii_digit() && b[2] == b'_' {
+        &base[3..]
+    } else {
+        base
+    }
+}
+
+fn specificity_from_archetype_count(count: usize) -> u8 {
+    match count {
+        0..=1 => 3,
+        2..=3 => 2,
+        _ => 1,
+    }
+}
+
+fn item_rep_rank(item: &ItemEntry) -> (u8, u32, i32) {
+    (
+        item.enchantment,
+        (item.tier as i32 - 6).unsigned_abs(),
+        item.index,
+    )
+}
+
+fn is_artifact_archetype(arch: &str) -> bool {
+    const ART_MARKERS: &[&str] = &[
+        "_HELL", "_MORGANA", "_UNDEAD", "_KEEPER", "_AVALON", "_FEY", "_CRYSTAL", "_ROYAL",
+        "_SET2", "_SET3",
+    ];
+    ART_MARKERS.iter().any(|m| arch.contains(m))
+}
+
+fn archetype_canonical_rank(arch: &str, item: &ItemEntry) -> (u8, usize, u32, i32) {
+    (
+        u8::from(is_artifact_archetype(arch)),
+        arch.len(),
+        (item.tier as i32 - 6).unsigned_abs(),
+        item.index,
+    )
+}
+
+fn is_generic_non_weapon_spell(name: &str) -> bool {
+    name == "AUTO_ATTACK"
+        || name.starts_with("MOUNT_")
+        || name.starts_with("FOOD_")
+        || name.starts_with("POTION_")
+        || name.starts_with("CAPE_")
+        || name.contains("GLOBAL_COOLDOWN")
+        || name.contains("DISMOUNT")
+}
+
+fn resolve_csl_chain(
+    uid: &str,
+    map: &HashMap<String, RawCraftSpellList>,
+    visited: &mut HashSet<String>,
+) -> (String, Vec<String>) {
+    if !visited.insert(uid.to_string()) {
+        return (String::new(), Vec::new());
+    }
+    let Some(node) = map.get(uid) else {
+        return (String::new(), Vec::new());
+    };
+    let (ref_subcat, mut spells) = if let Some(ref ref_uid) = node.reference {
+        resolve_csl_chain(ref_uid, map, visited)
+    } else {
+        (String::new(), Vec::new())
+    };
+    let subcat = if !node.subcategory.is_empty() {
+        node.subcategory.clone()
+    } else {
+        ref_subcat
+    };
+    for rem in &node.removes {
+        let up = rem.to_ascii_uppercase();
+        spells.retain(|s| s != &up);
+    }
+    for add in &node.adds {
+        let up = add.to_ascii_uppercase();
+        if !up.is_empty() && !spells.contains(&up) {
+            spells.push(up);
+        }
+    }
+    (subcat, spells)
+}
+
+fn extract_craftingspelllist(section: &str) -> Option<(Option<String>, Vec<String>, Vec<String>)> {
+    let mut pos = 0usize;
+    while let Some(rel) = section[pos..].find("<craftingspelllist") {
+        let start = pos + rel;
+        let after_tag = start + "<craftingspelllist".len();
+        let next_ch = section.as_bytes().get(after_tag).copied().unwrap_or(b' ');
+        if !next_ch.is_ascii_whitespace() && next_ch != b'>' && next_ch != b'/' {
+            pos = after_tag;
+            continue;
+        }
+        let rel_gt = section[after_tag..].find('>')?;
+        let gt = after_tag + rel_gt;
+        let attrs = &section[after_tag..gt];
+        let self_closing = attrs.trim_end().ends_with('/');
+        let reference = extract_xml_attr(attrs, "reference").filter(|s| !s.is_empty());
+        if self_closing {
+            return Some((reference, Vec::new(), Vec::new()));
+        }
+        let after_open = gt + 1;
+        let rel_close = section[after_open..].find("</craftingspelllist>")?;
+        let inner = &section[after_open..after_open + rel_close];
+
+        let mut adds = Vec::new();
+        let mut apos = 0usize;
+        while let Some(rel_cs) = inner[apos..].find("<craftspell") {
+            let cs_start = apos + rel_cs;
+            let Some(rel_csgt) = inner[cs_start..].find('>') else {
+                break;
+            };
+            let cs_slice = &inner[cs_start..cs_start + rel_csgt];
+            apos = cs_start + rel_csgt + 1;
+            if let Some(u) = extract_xml_attr(cs_slice, "uniquename") {
+                if !u.is_empty() {
+                    adds.push(u);
+                }
+            }
+        }
+
+        let mut removes = Vec::new();
+        let mut rpos = 0usize;
+        while let Some(rel_rs) = inner[rpos..].find("<removespell") {
+            let rs_start = rpos + rel_rs;
+            let Some(rel_rsgt) = inner[rs_start..].find('>') else {
+                break;
+            };
+            let rs_slice = &inner[rs_start..rs_start + rel_rsgt];
+            rpos = rs_start + rel_rsgt + 1;
+            if let Some(u) = extract_xml_attr(rs_slice, "uniquename") {
+                if !u.is_empty() {
+                    removes.push(u);
+                }
+            }
+        }
+        return Some((reference, adds, removes));
+    }
+    None
+}
+
+fn extract_spell_trigger_refs(inner: &str) -> Vec<String> {
+    const SKIP_TAGS: &[&str] = &[
+        "removeactivespell",
+        "removespell",
+        "ifspellactive",
+        "ifspellcategoryactive",
+        "checkspell",
+        "removeeffect",
+        "cancelspell",
+        "spellimmunity",
+        "locareference",
+    ];
+    const TRIGGER_ATTRS: &[&str] = &[
+        "spell",
+        "effect",
+        "endeffect",
+        "starteffect",
+        "overridespell",
+        "spellontrigger",
+        "applyspellwhennotargetsinarea",
+        "applyspellwhentargetsinarea",
+        "landscapecollisioneffect",
+        "collisioneffect",
+        "chargespell",
+        "spellchargesspell",
+    ];
+
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let bytes = inner.as_bytes();
+    let len = bytes.len();
+    let mut pos = 0usize;
+
+    while let Some(rel_lt) = inner[pos..].find('<') {
+        let lt = pos + rel_lt;
+        if lt + 2 >= len {
+            break;
+        }
+        let next_b = bytes[lt + 1];
+        if !next_b.is_ascii_alphabetic() {
+            pos = lt + 2;
+            continue;
+        }
+        let mut name_end = lt + 1;
+        while name_end < len
+            && (bytes[name_end].is_ascii_alphanumeric()
+                || bytes[name_end] == b'_'
+                || bytes[name_end] == b'-')
+        {
+            name_end += 1;
+        }
+        let child_tag = inner[lt + 1..name_end].to_ascii_lowercase();
+        let Some(rel_gt) = inner[name_end..].find('>') else {
+            break;
+        };
+        let attrs = &inner[name_end..name_end + rel_gt];
+        pos = name_end + rel_gt + 1;
+
+        if SKIP_TAGS.contains(&child_tag.as_str()) {
+            continue;
+        }
+        for attr in TRIGGER_ATTRS {
+            if let Some(val) = extract_xml_attr(attrs, attr) {
+                let up = val.trim().to_ascii_uppercase();
+                if !up.is_empty() && seen.insert(up.clone()) {
+                    out.push(up);
+                }
+            }
+        }
+    }
+    out
+}
 
 fn is_ingredient_returnable(unique_name: &str, max_return_attr: Option<&str>) -> bool {
     if max_return_attr == Some("0") {
@@ -906,9 +1610,18 @@ fn strip_xml_comments(input: &str) -> String {
 
 fn extract_xml_attr(attrs: &str, name: &str) -> Option<String> {
     let needle = format!("{name}=\"");
-    let start = attrs.find(&needle)? + needle.len();
-    let end = attrs[start..].find('"')?;
-    Some(attrs[start..start + end].trim().to_string())
+    let bytes = attrs.as_bytes();
+    let mut search_from = 0usize;
+    while let Some(rel) = attrs[search_from..].find(&needle) {
+        let match_pos = search_from + rel;
+        if match_pos == 0 || bytes[match_pos - 1].is_ascii_whitespace() {
+            let start = match_pos + needle.len();
+            let end = attrs[start..].find('"')?;
+            return Some(attrs[start..start + end].trim().to_string());
+        }
+        search_from = match_pos + 1;
+    }
+    None
 }
 
 fn humanize_spell_identifier(unique_name: &str) -> String {
@@ -1162,5 +1875,155 @@ mod tests {
         assert_eq!(reloaded.item_count(), catalog.item_count());
         assert_eq!(reloaded.spell_count(), catalog.spell_count());
         assert_eq!(reloaded.cluster_count(), catalog.cluster_count());
+    }
+
+    #[test]
+    fn resolves_quarterstaff_spells_fr_world_upserts_and_craftingspelllist_weapon_bindings() {
+        let mut catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+
+        let items_json = r#"[
+            {
+                "Index": "8100",
+                "UniqueName": "T6_2H_QUARTERSTAFF",
+                "LocalizedNames": { "EN-US": "Master's Quarterstaff", "FR-FR": "Bâton de combat du maître" }
+            },
+            {
+                "Index": "8101",
+                "UniqueName": "T6_2H_TWINSCYTHE_HELL",
+                "LocalizedNames": { "EN-US": "Master's Soulscythe", "FR-FR": "Faux d'âme du maître" }
+            }
+        ]"#;
+        assert_eq!(catalog.merge_ao_bin_dumps_items(items_json).unwrap(), 2);
+
+        // World merge resolves numeric cluster codes like 0203 -> Willowsigh Marsh
+        let world_json = r#"[
+            { "Index": "0203", "UniqueName": "Willowsigh Marsh" }
+        ]"#;
+        assert_eq!(catalog.merge_ao_bin_dumps_world(world_json).unwrap(), 1);
+        assert_eq!(catalog.cluster("0203").unwrap().name_fr, "Willowsigh Marsh");
+
+        let spells_xml = r#"<spells>
+            <passivespell uniquename="PASSIVE_MAXLOAD" />
+            <activespell uniquename="QSTAFF_COMBO" uisprite="QSTAFF_COMBO" category="damage">
+                <channelingspell effectcount="3">
+                    <spelleffectarea effect="QSTAFF_COMBO_EFFECT" />
+                </channelingspell>
+            </activespell>
+            <activespell uniquename="QSTAFF_COMBO_EFFECT" uisprite="QSTAFF_COMBO" category="damage" />
+            <activespell uniquename="VAULT_ATTACK" uisprite="VAULT_LEAP" category="damage">
+                <dash endeffect="VAULT_ATTACK_AREA" />
+            </activespell>
+            <passivespell uniquename="VAULT_ATTACK_AREA">
+                <removeactivespell spell="TORNADO" />
+                <spelleffectarea effect="VAULT_ATTACK_EFFECT" />
+            </passivespell>
+            <activespell uniquename="VAULT_ATTACK_EFFECT" uisprite="VAULT_LEAP" category="damage" />
+            <activespell uniquename="WHIRLING_STAFF" uisprite="WHIRLING_STRIKES" category="damage">
+                <channelingspell effectcount="3">
+                    <applyspell spell="WHIRLING_STAFF_DAMAGE" />
+                </channelingspell>
+            </activespell>
+            <activespell uniquename="WHIRLING_STAFF_DAMAGE" uisprite="WHIRLING_STRIKES" category="damage" />
+            <activespell uniquename="TORNADO" uisprite="SOULSCYTHE" category="damage" />
+            <passivespell uniquename="PASSIVE_CAPE_AVALON_EXPLOSION" uisprite="CAPE_COOLDOWN" />
+            <activespell uniquename="SPRINTHOT" uisprite="SPRINT_HEAL" category="buff" />
+        </spells>"#;
+        catalog.merge_ao_bin_dumps_spells_xml(spells_xml).unwrap();
+
+        // Check French localization resolution (even via suffix strip / uisprite)
+        let find_spell_in = |cat: &Catalog, uid: &str| -> SpellEntry {
+            (1..20)
+                .filter_map(|i| cat.spell(i))
+                .find(|s| s.unique_name == uid)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(
+            find_spell_in(&catalog, "QSTAFF_COMBO_EFFECT").name_fr,
+            "Danse du vent"
+        );
+        assert_eq!(
+            find_spell_in(&catalog, "VAULT_ATTACK_EFFECT").name_fr,
+            "Saut voûté"
+        );
+        assert_eq!(
+            find_spell_in(&catalog, "WHIRLING_STAFF_DAMAGE").name_fr,
+            "Frappes tourbillonnantes"
+        );
+        assert_eq!(
+            find_spell_in(&catalog, "PASSIVE_CAPE_AVALON_EXPLOSION").name_fr,
+            "Impulsion de force"
+        );
+        assert_eq!(
+            find_spell_in(&catalog, "SPRINTHOT").name_fr,
+            "Sprint rajeunissant"
+        );
+
+        let items_xml = r#"<items>
+            <weapon uniquename="T4_2H_QUARTERSTAFF" slottype="mainhand" shopsubcategory1="quarterstaff">
+                <craftingspelllist>
+                    <craftspell uniquename="QSTAFF_COMBO" slots="2" />
+                    <craftspell uniquename="WHIRLING_STAFF" slots="1" />
+                    <craftspell uniquename="VAULT_ATTACK" slots="3" />
+                </craftingspelllist>
+            </weapon>
+            <weapon uniquename="T6_2H_QUARTERSTAFF" slottype="mainhand" shopsubcategory1="quarterstaff">
+                <craftingspelllist reference="T4_2H_QUARTERSTAFF" />
+            </weapon>
+            <weapon uniquename="T6_2H_TWINSCYTHE_HELL" slottype="mainhand" shopsubcategory1="quarterstaff">
+                <craftingspelllist reference="T4_2H_QUARTERSTAFF">
+                    <removespell uniquename="VAULT_ATTACK" />
+                    <craftspell uniquename="TORNADO" slots="3" />
+                </craftingspelllist>
+            </weapon>
+        </items>"#;
+        catalog.merge_ao_bin_dumps_items_xml(items_xml).unwrap();
+
+        let qcombo_idx = find_spell_in(&catalog, "QSTAFF_COMBO_EFFECT").index;
+        let vault_idx = find_spell_in(&catalog, "VAULT_ATTACK_EFFECT").index;
+        let tornado_idx = find_spell_in(&catalog, "TORNADO").index;
+
+        let (w_shared, spec_shared) = catalog
+            .infer_weapon_from_spell_with_specificity(qcombo_idx)
+            .unwrap();
+        assert_eq!(w_shared.unique_name, "T6_2H_QUARTERSTAFF");
+        assert_eq!(spec_shared, 2); // 2 quarterstaff archetypes share W
+
+        let (w_vault, spec_vault) = catalog
+            .infer_weapon_from_spell_with_specificity(vault_idx)
+            .unwrap();
+        assert_eq!(w_vault.unique_name, "T6_2H_QUARTERSTAFF");
+        assert_eq!(spec_vault, 3); // signature E after removespell
+
+        let (w_tornado, spec_tornado) = catalog
+            .infer_weapon_from_spell_with_specificity(tornado_idx)
+            .unwrap();
+        assert_eq!(w_tornado.unique_name, "T6_2H_TWINSCYTHE_HELL");
+        assert_eq!(spec_tornado, 3);
+
+        // Best weapon picks signature over shared
+        let (best, best_spec) = catalog
+            .infer_best_weapon_from_spells(&[qcombo_idx, tornado_idx])
+            .unwrap();
+        assert_eq!(best.unique_name, "T6_2H_TWINSCYTHE_HELL");
+        assert_eq!(best_spec, 3);
+
+        // Cache persistence preserves weapon_spells across export_raw -> from_raw
+        let raw = catalog.export_raw();
+        let reloaded = Catalog::from_raw(raw);
+        assert_eq!(
+            reloaded
+                .infer_weapon_from_spell(vault_idx)
+                .unwrap()
+                .unique_name,
+            "T6_2H_QUARTERSTAFF"
+        );
+        assert_eq!(
+            reloaded
+                .infer_weapon_from_spell(tornado_idx)
+                .unwrap()
+                .unique_name,
+            "T6_2H_TWINSCYTHE_HELL"
+        );
     }
 }

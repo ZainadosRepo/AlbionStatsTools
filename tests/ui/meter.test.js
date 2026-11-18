@@ -6,6 +6,7 @@ import {
   buildAlbionItemIconUrl,
   buildAlbionSpellIconCandidates,
   buildAlbionSpellIconUrl,
+  buildSpellUniqueNameStems,
   collectSessionPriceableItems,
   computeRecipeMaterialCosts,
   computeSessionMarketValue,
@@ -15,6 +16,7 @@ import {
   formatMeterClipboard,
   formatNumber,
   getCityBadgeInfo,
+  normalizeSessionRecord,
   parseItemTierAndEnchantment,
   rankMeterPlayers,
   summarizeMarketPrices,
@@ -138,7 +140,7 @@ test("buildAlbionItemIconUrl builds official render URLs with literal @ and fall
   assert.equal(buildAlbionItemIconUrl(""), null);
 });
 
-test("buildAlbionSpellIconUrl and buildAlbionSpellIconCandidates prioritize uisprite and locale=en", () => {
+test("buildAlbionSpellIconUrl, buildSpellUniqueNameStems, and buildAlbionSpellIconCandidates prioritize uniqueName stems before uiSprite and locale=en", () => {
   assert.equal(
     buildAlbionSpellIconUrl("HOLYSTAFF_HEAL_BURST", 32),
     "https://render.albiononline.com/v1/spell/HOLYSTAFF_HEAL_BURST.png?size=32",
@@ -148,16 +150,30 @@ test("buildAlbionSpellIconUrl and buildAlbionSpellIconCandidates prioritize uisp
   assert.equal(buildAlbionSpellIconUrl(""), null);
   assert.equal(buildAlbionSpellIconUrl(null), null);
 
+  assert.deepEqual(buildSpellUniqueNameStems("QSTAFF_COMBO_EFFECT"), ["QSTAFF_COMBO_EFFECT", "QSTAFF_COMBO"]);
+  assert.deepEqual(buildSpellUniqueNameStems("PASSIVE_CAPE_AVALON_EXPLOSION"), [
+    "PASSIVE_CAPE_AVALON_EXPLOSION",
+    "PASSIVE_CAPE_AVALON",
+    "CAPE_AVALON",
+  ]);
+  assert.deepEqual(buildSpellUniqueNameStems("WHIRLING_STAFF_DAMAGE"), ["WHIRLING_STAFF_DAMAGE", "WHIRLING_STAFF"]);
+
   const spellUrls = buildAlbionSpellIconCandidates(
     {
-      uniqueName: "CHAIN_LIGHTNING_CAPE",
+      uniqueName: "QSTAFF_COMBO_EFFECT",
       nameEn: "Chain Lightning (Thetford)",
       uiSprite: "CAPE_THETFORD_LIGHTNING",
     },
     64,
   );
-  assert.equal(spellUrls[0], "https://render.albiononline.com/v1/spell/CAPE_THETFORD_LIGHTNING.png?size=64");
+  assert.equal(spellUrls[0], "https://render.albiononline.com/v1/spell/QSTAFF_COMBO_EFFECT.png?size=64");
+  assert.equal(spellUrls[2], "https://render.albiononline.com/v1/spell/QSTAFF_COMBO.png?size=64");
+  assert.ok(spellUrls.includes("https://render.albiononline.com/v1/spell/CAPE_THETFORD_LIGHTNING.png?size=64"));
   assert.ok(spellUrls.includes("https://render.albiononline.com/v1/spell/Chain%20Lightning.png?locale=en&size=64"));
+  assert.ok(
+    spellUrls.indexOf("https://render.albiononline.com/v1/spell/QSTAFF_COMBO.png?size=64") <
+      spellUrls.indexOf("https://render.albiononline.com/v1/spell/Chain%20Lightning.png?locale=en&size=64"),
+  );
   assert.deepEqual(buildAlbionSpellIconCandidates({ uniqueName: "AUTO_ATTACK", nameEn: "Auto Attack" }), []);
 });
 
@@ -256,4 +272,97 @@ test("parseItemTierAndEnchantment and getCityBadgeInfo provide accurate Albion U
   assert.equal(fallback.key, "default");
   assert.equal(fallback.label, "Unknown Realm");
   assert.equal(getCityBadgeInfo("-"), null);
+});
+
+test("normalizeSessionRecord unifies live session, rich archived session, and legacy archive fallback", () => {
+  assert.equal(normalizeSessionRecord(null), null);
+
+  const sampleSnapshot = {
+    localPlayer: { currentMapNameFr: "Willowsigh Marsh" },
+    session: {
+      elapsedSeconds: 300,
+      fame: 15000,
+      famePerHour: 180000,
+      silver: 6000,
+      silverPerHour: 72000,
+      respecPoints: 400,
+      respecPerHour: 4800,
+      might: 50,
+      mightPerHour: 600,
+      favor: 20,
+      favorPerHour: 240,
+      kills: 1,
+      deaths: 0,
+      factions: [{ city: "Thetford", coins: 120, rankPoints: 15, flagPoints: 0 }],
+    },
+    liveSessionZones: [{ clusterIndex: "0203", nameFr: "Willowsigh Marsh", durationSeconds: 300, gatheringResources: 12 }],
+    liveSessionCombatPlayers: [{ name: "Zainados", damage: 5000, spells: [] }],
+    liveSessionDungeons: [],
+    liveSessionGatheringTotals: { totalNodes: 4, totalResources: 12, wood: 12 },
+    liveSessionGatheringLog: [{ id: 1, uniqueName: "T5_WOOD", totalAmount: 12 }],
+    liveSessionLootLog: [{ id: 2, uniqueName: "SILVER", quantity: 350 }],
+    liveSessionTrades: [{ id: 3, player1Silver: 500, player2Silver: 0, salesTax: 0, itemCount: 1 }],
+    archivedSessions: [
+      {
+        id: "sess-rich",
+        label: "Session Soirée",
+        startedAtMs: 1000,
+        endedAtMs: 1801000,
+        durationSeconds: 1800,
+        mapNameFr: "Brumes",
+        fame: 90000,
+        famePerHour: 180000,
+        silver: 45000,
+        silverPerHour: 90000,
+        respecPoints: 1800,
+        might: 900,
+        favor: 450,
+        kills: 2,
+        deaths: 0,
+        zones: [{ clusterIndex: "0203", nameFr: "Willowsigh Marsh", durationSeconds: 1800 }],
+        gatheringTotals: { totalNodes: 2, totalResources: 8, ore: 8 },
+        gatheringLog: [{ id: 11, uniqueName: "T6_ORE", totalAmount: 8 }],
+      },
+      {
+        id: "sess-legacy",
+        label: "Ancienne",
+        startedAtMs: 1000,
+        endedAtMs: 2000,
+        durationSeconds: 600,
+        mapNameFr: "Thetford",
+        fame: 10000,
+        famePerHour: 60000,
+        silver: 2000,
+        silverPerHour: 12000,
+        respecPoints: 0,
+        might: 0,
+        favor: 0,
+        kills: 0,
+        deaths: 0,
+      },
+    ],
+  };
+
+  const live = normalizeSessionRecord(sampleSnapshot, "live");
+  assert.equal(live.isLive, true);
+  assert.equal(live.zones.length, 1);
+  assert.equal(live.combatPlayers.length, 1);
+  assert.equal(live.gatheringTotals.wood, 12);
+  assert.equal(live.gatheringLog.length, 1);
+  assert.equal(live.lootLog.length, 1);
+  assert.equal(live.trades.length, 1);
+  assert.equal(live.isLegacySummaryOnly, false);
+
+  const rich = normalizeSessionRecord(sampleSnapshot, "sess-rich");
+  assert.equal(rich.isLive, false);
+  assert.equal(rich.label, "Session Soirée");
+  assert.equal(rich.respecPerHour, 3600);
+  assert.equal(rich.mightPerHour, 1800);
+  assert.equal(rich.gatheringTotals.ore, 8);
+  assert.equal(rich.isLegacySummaryOnly, false);
+
+  const legacy = normalizeSessionRecord(sampleSnapshot, "sess-legacy");
+  assert.equal(legacy.isLive, false);
+  assert.equal(legacy.isLegacySummaryOnly, true);
+  assert.equal(legacy.gatheringTotals.totalResources, 0);
 });

@@ -253,6 +253,8 @@ pub enum AlbionTelemetryEvent {
     CharacterEquipmentChanged {
         object_id: i64,
         equipment: CharacterEquipment,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        equipped_spells: Vec<i32>,
     },
     NewDiscoveredItem {
         object_id: i64,
@@ -493,9 +495,11 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
         EV_CHARACTER_EQUIPMENT_CHANGED => {
             let object_id = p.get_i64(0)?;
             let equip_slice = p.get_i32_vec(2).unwrap_or_default();
+            let equipped_spells = p.get_i32_vec(5).unwrap_or_default();
             Some(AlbionTelemetryEvent::CharacterEquipmentChanged {
                 object_id,
                 equipment: CharacterEquipment::from_slice(&equip_slice),
+                equipped_spells,
             })
         }
         EV_NEW_EQUIPMENT_ITEM
@@ -608,14 +612,25 @@ fn decode_event_data(ev: &EventDataPayload) -> Option<AlbionTelemetryEvent> {
             in_active_combat: p.get_bool(1).unwrap_or(false),
             in_passive_combat: p.get_bool(2).unwrap_or(false),
         }),
-        EV_OTHER_GRABBED_LOOT => Some(AlbionTelemetryEvent::OtherGrabbedLoot {
-            object_id: p.get_i64(0).unwrap_or(0),
-            looted_from_name: p.get_str(1).unwrap_or_default().to_string(),
-            looted_by_name: p.get_str(2).unwrap_or_default().to_string(),
-            is_silver: p.get_bool(3).unwrap_or(false),
-            item_index: p.get_i32(4).unwrap_or(0),
-            quantity: p.get_i32(5).unwrap_or(0),
-        }),
+        EV_OTHER_GRABBED_LOOT => {
+            let is_silver = p.get_bool(3).unwrap_or(false);
+            let raw_qty = p.get_i64(5).unwrap_or(0);
+            let quantity = if is_silver {
+                FixPoint::from_raw(raw_qty)
+                    .as_i64_rounded()
+                    .clamp(0, i32::MAX as i64) as i32
+            } else {
+                raw_qty.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+            };
+            Some(AlbionTelemetryEvent::OtherGrabbedLoot {
+                object_id: p.get_i64(0).unwrap_or(0),
+                looted_from_name: p.get_str(1).unwrap_or_default().to_string(),
+                looted_by_name: p.get_str(2).unwrap_or_default().to_string(),
+                is_silver,
+                item_index: p.get_i32(4).unwrap_or(0),
+                quantity,
+            })
+        }
         EV_UPDATE_CURRENCY => Some(AlbionTelemetryEvent::UpdateCurrency {
             city_faction: CityFaction::from_currency_u8(p.get_u8(2).unwrap_or(0)),
             gained_faction_coins: p.get_fixpoint(3).unwrap_or_default(),
@@ -869,9 +884,13 @@ pub fn encode_telemetry_event_to_photon(event: &AlbionTelemetryEvent) -> PhotonM
         AlbionTelemetryEvent::CharacterEquipmentChanged {
             object_id,
             equipment,
+            equipped_spells,
         } => {
             p.insert(0, Protocol16Value::Long(*object_id));
             p.insert(2, Protocol16Value::IntArray(equipment.to_vec()));
+            if !equipped_spells.is_empty() {
+                p.insert(5, Protocol16Value::IntArray(equipped_spells.clone()));
+            }
             p.insert(252, Protocol16Value::Short(EV_CHARACTER_EQUIPMENT_CHANGED));
             PhotonMessage::EventData(EventDataPayload {
                 code: 1,
@@ -1119,7 +1138,14 @@ pub fn encode_telemetry_event_to_photon(event: &AlbionTelemetryEvent) -> PhotonM
             p.insert(2, Protocol16Value::String(looted_by_name.clone()));
             p.insert(3, Protocol16Value::Boolean(*is_silver));
             p.insert(4, Protocol16Value::Integer(*item_index));
-            p.insert(5, Protocol16Value::Integer(*quantity));
+            if *is_silver {
+                p.insert(
+                    5,
+                    Protocol16Value::Long(FixPoint::from_f64(*quantity as f64).raw()),
+                );
+            } else {
+                p.insert(5, Protocol16Value::Integer(*quantity));
+            }
             p.insert(252, Protocol16Value::Short(EV_OTHER_GRABBED_LOOT));
             PhotonMessage::EventData(EventDataPayload {
                 code: 1,
@@ -1625,5 +1651,102 @@ mod tests {
             })),
             None
         );
+    }
+
+    #[test]
+    fn decodes_silver_grabbed_loot_as_fixpoint_and_roundtrips_equipped_spells() {
+        // 1. Live Albion sends FixPoint (x10_000) in param[5] when is_silver == true
+        let mut p_silver = ParameterTable::new();
+        p_silver.insert(0, Protocol16Value::Long(5001));
+        p_silver.insert(1, Protocol16Value::String("Chest".into()));
+        p_silver.insert(2, Protocol16Value::String("Zainados".into()));
+        p_silver.insert(3, Protocol16Value::Boolean(true));
+        p_silver.insert(4, Protocol16Value::Integer(0));
+        p_silver.insert(5, Protocol16Value::Long(3_249_720));
+        p_silver.insert(252, Protocol16Value::Short(EV_OTHER_GRABBED_LOOT));
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::EventData(EventDataPayload {
+                code: 1,
+                parameters: p_silver,
+            })),
+            Some(AlbionTelemetryEvent::OtherGrabbedLoot {
+                object_id: 5001,
+                looted_from_name: "Chest".into(),
+                looted_by_name: "Zainados".into(),
+                is_silver: true,
+                item_index: 0,
+                quantity: 325,
+            })
+        );
+
+        let mut p_silver_2 = ParameterTable::new();
+        p_silver_2.insert(0, Protocol16Value::Long(5002));
+        p_silver_2.insert(1, Protocol16Value::String("Mob".into()));
+        p_silver_2.insert(2, Protocol16Value::String("Zainados".into()));
+        p_silver_2.insert(3, Protocol16Value::Boolean(true));
+        p_silver_2.insert(4, Protocol16Value::Integer(0));
+        p_silver_2.insert(5, Protocol16Value::Long(3_580_200));
+        p_silver_2.insert(252, Protocol16Value::Short(EV_OTHER_GRABBED_LOOT));
+        assert_eq!(
+            decode_photon_message(&PhotonMessage::EventData(EventDataPayload {
+                code: 1,
+                parameters: p_silver_2,
+            })),
+            Some(AlbionTelemetryEvent::OtherGrabbedLoot {
+                object_id: 5002,
+                looted_from_name: "Mob".into(),
+                looted_by_name: "Zainados".into(),
+                is_silver: true,
+                item_index: 0,
+                quantity: 358,
+            })
+        );
+
+        // 2. Roundtrip silver loot, item loot, and equipment + equipped_spells over Photon UDP
+        let events = vec![
+            AlbionTelemetryEvent::OtherGrabbedLoot {
+                object_id: 6001,
+                looted_from_name: "Boss".into(),
+                looted_by_name: "Zainados".into(),
+                is_silver: true,
+                item_index: 0,
+                quantity: 325,
+            },
+            AlbionTelemetryEvent::OtherGrabbedLoot {
+                object_id: 6002,
+                looted_from_name: "Boss".into(),
+                looted_by_name: "Zainados".into(),
+                is_silver: false,
+                item_index: 1004,
+                quantity: 3,
+            },
+            AlbionTelemetryEvent::CharacterEquipmentChanged {
+                object_id: 101,
+                equipment: CharacterEquipment {
+                    main_hand: 2222,
+                    chest: 1302,
+                    ..CharacterEquipment::default()
+                },
+                equipped_spells: vec![5101, 5102, 5103],
+            },
+            AlbionTelemetryEvent::CharacterEquipmentChanged {
+                object_id: 102,
+                equipment: CharacterEquipment::default(),
+                equipped_spells: Vec::new(),
+            },
+        ];
+
+        let msgs: Vec<PhotonMessage> = events
+            .iter()
+            .map(encode_telemetry_event_to_photon)
+            .collect();
+        let udp = build_photon_udp_packet(&msgs, true, false, 77);
+        let mut parser = PhotonParser::new();
+        let decoded: Vec<AlbionTelemetryEvent> = parser
+            .parse_udp_payload(&udp)
+            .iter()
+            .filter_map(decode_photon_message)
+            .collect();
+        assert_eq!(decoded, events);
     }
 }

@@ -260,6 +260,29 @@ export const buildAlbionSpellIconUrl = (uniqueName, size = 64) => {
   return `https://render.albiononline.com/v1/spell/${encodeURIComponent(clean)}.png?size=${px}`;
 };
 
+const SPELL_SUFFIX_RE =
+  /_(?:EFFECT|DAMAGE|HEAL|BUFF|DEBUFF|HIT|IMPACT|EXPLOSION|TRIGGER|DOT|HOT|PROC|CHANNEL|AOE|TICK)$/i;
+
+export const buildSpellUniqueNameStems = (uniqueName) => {
+  const clean = String(uniqueName ?? "").trim();
+  if (!clean || /^SPELL_\d+$/i.test(clean) || clean === "UNKNOWN" || clean === "AUTO_ATTACK") {
+    return [];
+  }
+  const stems = [clean];
+  let cur = clean;
+  for (let i = 0; i < 3; i += 1) {
+    const next = cur.replace(SPELL_SUFFIX_RE, "");
+    if (next === cur || next.length < 4) break;
+    stems.push(next);
+    cur = next;
+  }
+  if (/^PASSIVE_CAPE_/i.test(cur)) {
+    const withoutPassive = cur.replace(/^PASSIVE_/i, "");
+    if (withoutPassive.length >= 4) stems.push(withoutPassive);
+  }
+  return [...new Set(stems)];
+};
+
 export const buildAlbionSpellIconCandidates = (spell, size = 64) => {
   const obj = typeof spell === "string" ? { uniqueName: spell } : spell || {};
   const uniqueName = String(obj.uniqueName ?? "").trim();
@@ -272,6 +295,12 @@ export const buildAlbionSpellIconCandidates = (spell, size = 64) => {
 
   const px = Math.max(16, Math.min(217, Math.round(Number(size) || 64)));
   const urls = [];
+
+  for (const stem of buildSpellUniqueNameStems(uniqueName)) {
+    const encStem = encodeURIComponent(stem);
+    urls.push(`https://render.albiononline.com/v1/spell/${encStem}.png?size=${px}`);
+    urls.push(`https://render.albiononline.com/v1/spell/${encStem}.png`);
+  }
 
   if (uiSprite && uiSprite !== "UNKNOWN") {
     const encSprite = encodeURIComponent(uiSprite);
@@ -288,12 +317,6 @@ export const buildAlbionSpellIconCandidates = (spell, size = 64) => {
     const encEn = encodeURIComponent(cleanNameEn);
     urls.push(`https://render.albiononline.com/v1/spell/${encEn}.png?locale=en&size=${px}`);
     urls.push(`https://render.albiononline.com/v1/spell/${encEn}.png?locale=en`);
-  }
-
-  if (uniqueName && !/^SPELL_\d+$/.test(uniqueName) && uniqueName !== "UNKNOWN") {
-    const encUnique = encodeURIComponent(uniqueName);
-    urls.push(`https://render.albiononline.com/v1/spell/${encUnique}.png?size=${px}`);
-    urls.push(`https://render.albiononline.com/v1/spell/${encUnique}.png`);
   }
 
   return [...new Set(urls)];
@@ -467,4 +490,157 @@ export const getCityBadgeInfo = (cityName) => {
   const clean = String(cityName ?? "").trim();
   if (!clean || clean === "-") return null;
   return CITY_INFO[clean] || { key: "default", icon: "🏛️", label: clean };
+};
+
+const EMPTY_GATHERING_TOTALS = {
+  totalNodes: 0,
+  totalResources: 0,
+  totalEstimatedSilver: 0,
+  wood: 0,
+  ore: 0,
+  fiber: 0,
+  hide: 0,
+  rock: 0,
+  fish: 0,
+};
+
+const normalizeGatheringTotals = (raw) => ({
+  ...EMPTY_GATHERING_TOTALS,
+  ...(raw || {}),
+});
+
+/**
+ * Normalizes either the live active session or a persisted ArchivedSession into
+ * one uniform structure for the Session Inspector (Tab 2).
+ */
+export const normalizeSessionRecord = (snapshot, selectedSessionId = "live") => {
+  if (!snapshot) return null;
+  const archived = (snapshot.archivedSessions || []).find((a) => a.id === selectedSessionId);
+  if (archived) {
+    const durationSeconds = Math.max(1, Number(archived.durationSeconds) || 1);
+    const hours = durationSeconds / 3600;
+    const zones = Array.isArray(archived.zones) ? archived.zones : [];
+    const combatPlayers = Array.isArray(archived.combatPlayers) ? archived.combatPlayers : [];
+    const dungeons = Array.isArray(archived.dungeons) ? archived.dungeons : [];
+    const gatheringTotals = normalizeGatheringTotals(archived.gatheringTotals);
+    const gatheringLog = Array.isArray(archived.gatheringLog) ? archived.gatheringLog : [];
+    const lootLog = Array.isArray(archived.lootLog) ? archived.lootLog : [];
+    const trades = Array.isArray(archived.trades) ? archived.trades : [];
+    const factions = Array.isArray(archived.factions) ? archived.factions : [];
+    const hasDetails =
+      zones.length > 0 ||
+      combatPlayers.length > 0 ||
+      dungeons.length > 0 ||
+      gatheringLog.length > 0 ||
+      lootLog.length > 0 ||
+      trades.length > 0 ||
+      (gatheringTotals.totalNodes || 0) > 0;
+    const hasTotals =
+      (archived.fame || 0) > 0 ||
+      (archived.silver || 0) > 0 ||
+      (archived.respecPoints || 0) > 0 ||
+      (archived.might || 0) > 0 ||
+      (archived.kills || 0) > 0 ||
+      (archived.deaths || 0) > 0;
+
+    return {
+      id: archived.id,
+      isLive: false,
+      label: archived.label || "Session archivée",
+      mapNameFr: archived.mapNameFr || "Zone inconnue",
+      startedAtMs: Number(archived.startedAtMs) || 0,
+      endedAtMs: Number(archived.endedAtMs) || 0,
+      durationSeconds,
+      fame: Number(archived.fame) || 0,
+      famePerHour: Number(archived.famePerHour) || (Number(archived.fame) || 0) / hours,
+      zoneFame: Number(archived.zoneFame) || 0,
+      satchelFame: Number(archived.satchelFame) || 0,
+      silver: Number(archived.silver) || 0,
+      silverPerHour: Number(archived.silverPerHour) || (Number(archived.silver) || 0) / hours,
+      guildTaxPaid: Number(archived.guildTaxPaid) || 0,
+      clusterTaxPaid: Number(archived.clusterTaxPaid) || 0,
+      repairCosts: Number(archived.repairCosts) || 0,
+      respecPoints: Number(archived.respecPoints) || 0,
+      respecPerHour: (Number(archived.respecPoints) || 0) / hours,
+      respecPaidSilver: Number(archived.respecPaidSilver) || 0,
+      might: Number(archived.might) || 0,
+      mightPerHour: (Number(archived.might) || 0) / hours,
+      favor: Number(archived.favor) || 0,
+      favorPerHour: (Number(archived.favor) || 0) / hours,
+      seasonPoints: Number(archived.seasonPoints) || 0,
+      kills: Number(archived.kills) || 0,
+      deaths: Number(archived.deaths) || 0,
+      factions,
+      zones,
+      combatPlayers,
+      dungeons,
+      gatheringTotals,
+      gatheringLog,
+      lootLog,
+      trades,
+      isLegacySummaryOnly: !hasDetails && hasTotals,
+    };
+  }
+
+  const s = snapshot.session || {};
+  const lp = snapshot.localPlayer || {};
+  const durationSeconds = Math.max(0, Number(s.elapsedSeconds) || 0);
+  const zones = Array.isArray(snapshot.liveSessionZones) ? snapshot.liveSessionZones : [];
+  const combatPlayers = Array.isArray(snapshot.liveSessionCombatPlayers)
+    ? snapshot.liveSessionCombatPlayers
+    : snapshot.meterPlayers || [];
+  const dungeons = Array.isArray(snapshot.liveSessionDungeons)
+    ? snapshot.liveSessionDungeons
+    : snapshot.dungeons || [];
+  const gatheringTotals = normalizeGatheringTotals(
+    snapshot.liveSessionGatheringTotals || snapshot.gatheringTotals,
+  );
+  const gatheringLog = Array.isArray(snapshot.liveSessionGatheringLog)
+    ? snapshot.liveSessionGatheringLog
+    : snapshot.gatheringLog || [];
+  const lootLog = Array.isArray(snapshot.liveSessionLootLog)
+    ? snapshot.liveSessionLootLog
+    : snapshot.lootLog || [];
+  const trades = Array.isArray(snapshot.liveSessionTrades)
+    ? snapshot.liveSessionTrades
+    : snapshot.trades || [];
+  const factions = Array.isArray(s.factions) ? s.factions : [];
+
+  return {
+    id: "live",
+    isLive: true,
+    label: "Session en direct",
+    mapNameFr: lp.currentMapNameFr || "En attente…",
+    startedAtMs: 0,
+    endedAtMs: 0,
+    durationSeconds,
+    fame: Number(s.fame) || 0,
+    famePerHour: Number(s.famePerHour) || 0,
+    zoneFame: Number(s.zoneFame) || 0,
+    satchelFame: Number(s.satchelFame) || 0,
+    silver: Number(s.silver) || 0,
+    silverPerHour: Number(s.silverPerHour) || 0,
+    guildTaxPaid: Number(s.guildTaxPaid) || 0,
+    clusterTaxPaid: Number(s.clusterTaxPaid) || 0,
+    repairCosts: Number(s.repairCosts) || 0,
+    respecPoints: Number(s.respecPoints) || 0,
+    respecPerHour: Number(s.respecPerHour) || 0,
+    respecPaidSilver: Number(s.respecPaidSilver) || 0,
+    might: Number(s.might) || 0,
+    mightPerHour: Number(s.mightPerHour) || 0,
+    favor: Number(s.favor) || 0,
+    favorPerHour: Number(s.favorPerHour) || 0,
+    seasonPoints: Number(s.seasonPoints) || 0,
+    kills: Number(s.kills) || 0,
+    deaths: Number(s.deaths) || 0,
+    factions,
+    zones,
+    combatPlayers,
+    dungeons,
+    gatheringTotals,
+    gatheringLog,
+    lootLog,
+    trades,
+    isLegacySummaryOnly: false,
+  };
 };

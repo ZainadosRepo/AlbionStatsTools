@@ -11,6 +11,7 @@ import {
   formatMeterClipboard,
   formatNumber,
   getCityBadgeInfo,
+  normalizeSessionRecord,
   parseItemTierAndEnchantment,
   rankMeterPlayers,
   summarizeMarketPrices,
@@ -29,6 +30,8 @@ let settings = { ...DEFAULT_SETTINGS };
 let latestState = null;
 let selectedPlayerName = null;
 let selectedSnapshotId = "live";
+let selectedSessionId = "live";
+let activeSessionSubtab = "all";
 let activeTab = "combat";
 let lastStateSignature = "";
 let toastTimer = null;
@@ -38,7 +41,13 @@ let recipePriceSeq = 0;
 let activeCraftItemContext = null;
 let lastPriceRows = [];
 let browserMaximizedFallback = false;
+let catalogAutoSyncAttempted = false;
+let catalogSyncInFlight = false;
 const itemInfoCache = new Map();
+const expandedSessionCombatPlayers = new Set();
+const resolvedIconCache = new Map();
+const failedIconUrls = new Set();
+const lastRenderKeys = new Map();
 
 const SLOT_LABELS_FR = {
   mainHand: "Arme",
@@ -56,6 +65,14 @@ const SLOT_LABELS_FR = {
 };
 
 const el = (id) => document.getElementById(id);
+
+const shouldSkipRender = (sectionKey, dataKey, force = false) => {
+  if (!force && lastRenderKeys.get(sectionKey) === dataKey) {
+    return true;
+  }
+  lastRenderKeys.set(sectionKey, dataKey);
+  return false;
+};
 
 const showToast = (msg) => {
   const banner = el("toast-banner");
@@ -133,7 +150,57 @@ const inferSpellFallbackGlyph = (uniqueName, category = "") => {
   return "ico-spell-damage";
 };
 
-// Global CSP-compliant capture-phase media fallback handler (replaces blocked inline onerror)
+const markSlotImgLoaded = (img) => {
+  if (!(img instanceof HTMLImageElement) || !img.classList.contains("slot-img")) return;
+  const loadedUrl = img.currentSrc || img.src;
+  const cacheKey = img.getAttribute("data-icon-key");
+  if (cacheKey && loadedUrl) {
+    resolvedIconCache.set(cacheKey, loadedUrl);
+  }
+  img.hidden = false;
+  img.classList.add("is-loaded");
+  const slot = img.closest(".icon-slot");
+  if (slot) {
+    slot.classList.remove("is-fallback");
+    slot.classList.add("is-loaded");
+  }
+};
+
+const hydrateLoadedImages = (root = document) => {
+  if (!root || typeof root.querySelectorAll !== "function") return;
+  root.querySelectorAll("img.slot-img").forEach((img) => {
+    if (img.complete && img.naturalWidth > 0) {
+      markSlotImgLoaded(img);
+    }
+  });
+};
+
+const prepareIconCandidates = (cacheKey, rawCandidates) => {
+  const cachedUrl = cacheKey ? resolvedIconCache.get(cacheKey) : null;
+  const filtered = [];
+  if (cachedUrl && !failedIconUrls.has(cachedUrl)) {
+    filtered.push(cachedUrl);
+  }
+  for (const url of rawCandidates) {
+    if (url && !failedIconUrls.has(url) && !filtered.includes(url)) {
+      filtered.push(url);
+    }
+  }
+  return filtered;
+};
+
+// Global CSP-compliant capture-phase media handlers (replace blocked inline onload/onerror)
+document.addEventListener(
+  "load",
+  (ev) => {
+    const target = ev.target;
+    if (target instanceof HTMLImageElement && target.classList.contains("slot-img")) {
+      markSlotImgLoaded(target);
+    }
+  },
+  true,
+);
+
 document.addEventListener(
   "error",
   (ev) => {
@@ -141,8 +208,18 @@ document.addEventListener(
     if (!(target instanceof HTMLImageElement) || !target.classList.contains("slot-img")) {
       return;
     }
+    const failedUrl = target.currentSrc || target.getAttribute("src") || target.src;
+    if (failedUrl) {
+      failedIconUrls.add(failedUrl);
+    }
+    const cacheKey = target.getAttribute("data-icon-key");
+    if (cacheKey && resolvedIconCache.get(cacheKey) === failedUrl) {
+      resolvedIconCache.delete(cacheKey);
+    }
     const rawFallbacks = target.getAttribute("data-fallbacks") || "";
-    const remaining = rawFallbacks.split("|").filter(Boolean);
+    const remaining = rawFallbacks
+      .split("|")
+      .filter((u) => Boolean(u) && !failedIconUrls.has(u));
     if (remaining.length > 0) {
       const nextUrl = remaining.shift();
       target.setAttribute("data-fallbacks", remaining.join("|"));
@@ -150,7 +227,12 @@ document.addEventListener(
       return;
     }
     target.hidden = true;
-    target.closest(".icon-slot")?.classList.add("is-fallback");
+    target.classList.remove("is-loaded");
+    const slot = target.closest(".icon-slot");
+    if (slot) {
+      slot.classList.remove("is-loaded");
+      slot.classList.add("is-fallback");
+    }
   },
   true,
 );
@@ -162,8 +244,10 @@ const renderCityBadge = (cityName) => {
 };
 
 const renderItemThumb = (uniqueName, cls = "icon-slot-sm", slotHint = "") => {
-  const candidates = buildAlbionItemIconCandidates(uniqueName, 128);
-  const glyph = inferItemFallbackGlyph(uniqueName, slotHint);
+  const clean = String(uniqueName ?? "").trim();
+  const iconKey = clean ? `item:${clean}` : "";
+  const candidates = prepareIconCandidates(iconKey, buildAlbionItemIconCandidates(clean, 128));
+  const glyph = inferItemFallbackGlyph(clean, slotHint);
   if (candidates.length === 0) {
     return `
       <span class="icon-slot ${cls} is-fallback" aria-hidden="true">
@@ -175,15 +259,17 @@ const renderItemThumb = (uniqueName, cls = "icon-slot-sm", slotHint = "") => {
   return `
     <span class="icon-slot ${cls}">
       <svg class="slot-fallback-svg" aria-hidden="true"><use href="#${glyph}"></use></svg>
-      <img class="slot-img" src="${escapeHtml(primary)}" data-fallbacks="${escapeHtml(fallbacks.join("|"))}" alt="" loading="lazy" decoding="async" />
+      <img class="slot-img" data-icon-key="${escapeHtml(iconKey)}" src="${escapeHtml(primary)}" data-fallbacks="${escapeHtml(fallbacks.join("|"))}" alt="" decoding="async" />
     </span>
   `;
 };
 
 const renderItemThumbWithTier = (uniqueName, slotHint = "") => {
-  const candidates = buildAlbionItemIconCandidates(uniqueName, 128);
-  const glyph = inferItemFallbackGlyph(uniqueName, slotHint);
-  const meta = parseItemTierAndEnchantment(uniqueName);
+  const clean = String(uniqueName ?? "").trim();
+  const iconKey = clean ? `item:${clean}` : "";
+  const candidates = prepareIconCandidates(iconKey, buildAlbionItemIconCandidates(clean, 128));
+  const glyph = inferItemFallbackGlyph(clean, slotHint);
+  const meta = parseItemTierAndEnchantment(clean);
   const tierCls = meta.tier ? `tier-box-${meta.tier}` : "";
   const tierBadge = meta.label
     ? `<span class="tier-chip ${meta.tier ? `tier-${meta.tier}` : ""}">${meta.label}</span>`
@@ -206,7 +292,7 @@ const renderItemThumbWithTier = (uniqueName, slotHint = "") => {
   return `
     <span class="icon-slot item-thumb-box ${tierCls}">
       <svg class="slot-fallback-svg" aria-hidden="true"><use href="#${glyph}"></use></svg>
-      <img class="slot-img item-thumb-img" src="${escapeHtml(primary)}" data-fallbacks="${escapeHtml(fallbacks.join("|"))}" alt="" loading="lazy" decoding="async" />
+      <img class="slot-img item-thumb-img" data-icon-key="${escapeHtml(iconKey)}" src="${escapeHtml(primary)}" data-fallbacks="${escapeHtml(fallbacks.join("|"))}" alt="" decoding="async" />
       ${tierBadge}
       ${enchBadge}
     </span>
@@ -215,8 +301,10 @@ const renderItemThumbWithTier = (uniqueName, slotHint = "") => {
 
 const renderSpellThumb = (spell) => {
   const obj = typeof spell === "string" ? { uniqueName: spell } : spell || {};
-  const candidates = buildAlbionSpellIconCandidates(obj, 64);
-  const glyph = inferSpellFallbackGlyph(obj.uniqueName, obj.category);
+  const clean = String(obj.uniqueName ?? "").trim();
+  const iconKey = clean ? `spell:${clean}:${obj.uiSprite || ""}` : "";
+  const candidates = prepareIconCandidates(iconKey, buildAlbionSpellIconCandidates(obj, 64));
+  const glyph = inferSpellFallbackGlyph(clean, obj.category);
   const catCls = `spell-cat-${escapeHtml(String(obj.category || "damage").toLowerCase())}`;
 
   if (candidates.length === 0) {
@@ -230,7 +318,7 @@ const renderSpellThumb = (spell) => {
   return `
     <span class="icon-slot icon-slot-sm ${catCls}">
       <svg class="slot-fallback-svg" aria-hidden="true"><use href="#${glyph}"></use></svg>
-      <img class="slot-img" src="${escapeHtml(primary)}" data-fallbacks="${escapeHtml(fallbacks.join("|"))}" alt="" loading="lazy" decoding="async" />
+      <img class="slot-img" data-icon-key="${escapeHtml(iconKey)}" src="${escapeHtml(primary)}" data-fallbacks="${escapeHtml(fallbacks.join("|"))}" alt="" decoding="async" />
     </span>
   `;
 };
@@ -385,7 +473,7 @@ const renderHeader = () => {
     catCount.textContent = formatExactInt(snap.catalogItemCount);
     const syncBtn = el("btn-sync-catalog");
     if (syncBtn) {
-      syncBtn.title = `Catalogue : ${formatExactInt(snap.catalogItemCount)} objets • ${formatExactInt(snap.catalogSpellCount || 0)} sorts • ${formatExactInt(snap.catalogRecipeCount || 0)} recettes — cliquer pour synchroniser ao-bin-dumps`;
+      syncBtn.title = `Catalogue : ${formatExactInt(snap.catalogItemCount)} objets • ${formatExactInt(snap.catalogSpellCount || 0)} sorts • ${formatExactInt(snap.catalogClusterCount || 0)} zones • ${formatExactInt(snap.catalogRecipeCount || 0)} recettes — cliquer pour synchroniser ao-bin-dumps`;
     }
   }
 
@@ -426,7 +514,7 @@ const renderSnapshotSelect = () => {
   }
 };
 
-const renderCombatTab = () => {
+const renderCombatTab = (force = false) => {
   const data = activeMeterDataset();
   el("combat-timer").textContent = formatDuration(data.combatSeconds);
   el("party-total-dmg").textContent = formatNumber(data.totalDamage);
@@ -434,15 +522,23 @@ const renderCombatTab = () => {
   el("party-total-taken").textContent = formatNumber(data.totalTaken);
 
   const ranked = rankMeterPlayers(data.players, settings.meterMode);
-  const container = el("meter-rows");
-  if (ranked.length === 0) {
-    container.innerHTML = `<div class="empty-state">Aucun combat actif. Lancez Albion Online, changez de zone ou engagez un combat pour afficher les statistiques en direct.</div>`;
-    el("spell-rows").innerHTML = `<div class="empty-state">Sélectionnez un joueur pour inspecter la répartition de ses sorts.</div>`;
+  if (ranked.length > 0 && (!selectedPlayerName || !ranked.some((p) => p.name === selectedPlayerName))) {
+    selectedPlayerName = ranked[0].name;
+  }
+
+  const renderKey = JSON.stringify([settings.meterMode, selectedSnapshotId, selectedPlayerName, ranked]);
+  if (shouldSkipRender("combat", renderKey, force)) {
     return;
   }
 
-  if (!selectedPlayerName || !ranked.some((p) => p.name === selectedPlayerName)) {
-    selectedPlayerName = ranked[0].name;
+  const container = el("meter-rows");
+  const spellWrap = el("spell-rows");
+  if (ranked.length === 0) {
+    container.innerHTML = `<div class="empty-state">Aucun combat actif. Lancez Albion Online, changez de zone ou engagez un combat pour afficher les statistiques en direct.</div>`;
+    spellWrap.innerHTML = `<div class="empty-state">Sélectionnez un joueur pour inspecter la répartition de ses sorts.</div>`;
+    el("spell-panel-title").textContent = "Détail des Sorts";
+    el("spell-panel-weapon").textContent = "Sélectionnez un joueur";
+    return;
   }
 
   container.innerHTML = ranked
@@ -472,13 +568,7 @@ const renderCombatTab = () => {
       `;
     })
     .join("");
-
-  container.querySelectorAll(".meter-row").forEach((row) => {
-    row.addEventListener("click", () => {
-      selectedPlayerName = row.getAttribute("data-player-name");
-      renderCombatTab();
-    });
-  });
+  hydrateLoadedImages(container);
 
   const activePlayer = ranked.find((p) => p.name === selectedPlayerName) || ranked[0];
   el("spell-panel-title").textContent = `Sorts — ${activePlayer.name}`;
@@ -486,9 +576,9 @@ const renderCombatTab = () => {
 
   const spells = activePlayer.spells || [];
   if (spells.length === 0) {
-    el("spell-rows").innerHTML = `<div class="empty-state">Aucun sort enregistré pour ce joueur.</div>`;
+    spellWrap.innerHTML = `<div class="empty-state">Aucun sort enregistré pour ce joueur.</div>`;
   } else {
-    el("spell-rows").innerHTML = `
+    spellWrap.innerHTML = `
       <table class="data-table">
         <thead>
           <tr>
@@ -523,157 +613,711 @@ const renderCombatTab = () => {
         </tbody>
       </table>
     `;
+    hydrateLoadedImages(spellWrap);
   }
 };
 
-const renderSessionTab = () => {
+const ZONE_KIND_LABELS_FR = {
+  city: "Cité",
+  safe: "Zone bleue",
+  yellow: "Zone jaune",
+  red: "Zone rouge",
+  black: "Zone noire",
+  openworld: "Monde ouvert",
+  mists: "Brumes",
+  avalon: "Routes d'Avalon",
+  dungeon: "Donjon",
+  solodungeon: "Donjon solo",
+  groupdungeon: "Donjon de groupe",
+  avaloniandungeon: "Donjon avalonien",
+  corrupteddungeon: "Donjon corrompu",
+  expedition: "Expédition",
+  hellgate: "Hellgate",
+  corrupted: "Donjon corrompu",
+  island: "Île",
+  unknown: "Zone",
+};
+
+const formatZoneKindFr = (kind, tier) => {
+  const raw = String(kind ?? "").trim().toLowerCase();
+  const label = ZONE_KIND_LABELS_FR[raw] || (raw ? raw : "Zone");
+  return tier > 0 ? `${label} • T${tier}` : label;
+};
+
+const formatShortDateTime = (ms) => {
+  if (!ms || ms <= 0) return "—";
+  return new Date(ms).toLocaleString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const sessionPlayerExpandKey = (sessionId, playerName) => `${sessionId}::${playerName}`;
+
+const renderSessionZonesPanel = (rec) => {
+  const zones = rec.zones || [];
+  return `
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-heading-group">
+          <h2>Zones traversées</h2>
+          <span class="sub-label">Temps passé, renommée, silver et ressources par zone</span>
+        </div>
+        <span class="badge-subtle">${zones.length} zone${zones.length > 1 ? "s" : ""}</span>
+      </div>
+      <div class="table-wrap">
+        ${
+          zones.length === 0
+            ? `<div class="empty-state">Aucune transition de zone enregistrée durant cette session.</div>`
+            : `
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Zone</th>
+                <th>Type</th>
+                <th class="num-col">Durée</th>
+                <th class="num-col">Renommée</th>
+                <th class="num-col">Silver</th>
+                <th class="num-col col-optional">Récolte</th>
+                <th class="num-col col-optional">K / D</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${zones
+                .map(
+                  (z) => `
+                <tr>
+                  <td><strong>${escapeHtml(z.nameFr || z.clusterIndex || "Zone inconnue")}</strong></td>
+                  <td><span class="mono-tag">${escapeHtml(formatZoneKindFr(z.kind, z.tier))}</span></td>
+                  <td class="num-col mono">${formatDuration(z.durationSeconds)}</td>
+                  <td class="num-col mono">${formatNumber(z.fame)}</td>
+                  <td class="num-col mono">${formatNumber(z.silver)} Silver</td>
+                  <td class="num-col mono col-optional">${formatExactInt(z.gatheringResources)} res. (${z.gatheringNodes || 0})</td>
+                  <td class="num-col mono col-optional">${z.kills || 0} / ${z.deaths || 0}</td>
+                </tr>
+              `,
+                )
+                .join("")}
+            </tbody>
+          </table>
+        `
+        }
+      </div>
+    </div>
+  `;
+};
+
+const renderSessionGatheringPanel = (rec) => {
+  const t = rec.gatheringTotals || {};
+  const log = rec.gatheringLog || [];
+  return `
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-heading-group">
+          <h2>Récolte de la session</h2>
+          <span class="sub-label">${formatExactInt(t.totalResources)} ressources (${t.totalNodes || 0} nœuds) • ~${formatExactInt(t.totalEstimatedSilver)} Silver estimés</span>
+        </div>
+        <span class="badge-subtle">${log.length} type${log.length > 1 ? "s" : ""}</span>
+      </div>
+      <div class="session-gathering-strip">
+        <div class="session-gat-pill"><span class="gat-kind"><svg class="ico"><use href="#ico-wood"></use></svg>Bois</span><strong>${formatExactInt(t.wood)}</strong></div>
+        <div class="session-gat-pill"><span class="gat-kind"><svg class="ico"><use href="#ico-ore"></use></svg>Minerai</span><strong>${formatExactInt(t.ore)}</strong></div>
+        <div class="session-gat-pill"><span class="gat-kind"><svg class="ico"><use href="#ico-fiber"></use></svg>Fibre</span><strong>${formatExactInt(t.fiber)}</strong></div>
+        <div class="session-gat-pill"><span class="gat-kind"><svg class="ico"><use href="#ico-hide"></use></svg>Peau</span><strong>${formatExactInt(t.hide)}</strong></div>
+        <div class="session-gat-pill"><span class="gat-kind"><svg class="ico"><use href="#ico-rock"></use></svg>Pierre</span><strong>${formatExactInt(t.rock)}</strong></div>
+        <div class="session-gat-pill"><span class="gat-kind"><svg class="ico"><use href="#ico-fish"></use></svg>Poisson</span><strong>${formatExactInt(t.fish)}</strong></div>
+      </div>
+      <div class="table-wrap">
+        ${
+          log.length === 0
+            ? `<div class="empty-state">Aucune ressource récoltée durant cette session.</div>`
+            : `
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Ressource</th>
+                <th>Tier</th>
+                <th class="num-col col-optional">Base</th>
+                <th class="num-col col-optional">Récolteur</th>
+                <th class="num-col col-optional">Premium</th>
+                <th class="num-col">Total</th>
+                <th class="num-col">Estimation</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${log
+                .map(
+                  (g) => `
+                <tr>
+                  <td>
+                    <span class="cell-with-icon">
+                      ${renderItemThumb(g.uniqueName, "icon-slot-sm", "resource")}
+                      <strong>${escapeHtml(g.nameFr)}</strong>
+                    </span>
+                  </td>
+                  <td><span class="mono-tag">T${g.tier}.${g.enchantment}</span></td>
+                  <td class="num-col mono col-optional">${g.standardAmount}</td>
+                  <td class="num-col mono col-optional">+${g.collectorBonus}</td>
+                  <td class="num-col mono col-optional">+${g.premiumBonus}</td>
+                  <td class="num-col mono"><strong>${g.totalAmount}</strong></td>
+                  <td class="num-col mono text-accent">${formatExactInt(g.estimatedSilver)} Silver</td>
+                </tr>
+              `,
+                )
+                .join("")}
+            </tbody>
+          </table>
+        `
+        }
+      </div>
+    </div>
+  `;
+};
+
+const renderSessionCombatPanel = (rec) => {
+  const players = [...(rec.combatPlayers || [])].sort(
+    (a, b) => (b.damage || 0) + (b.heal || 0) - ((a.damage || 0) + (a.heal || 0)),
+  );
+  return `
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-heading-group">
+          <h2>Combats &amp; Détail des sorts</h2>
+          <span class="sub-label">Cliquez sur un joueur pour afficher ses sorts utilisés durant la session</span>
+        </div>
+        <span class="badge-subtle">${players.length} combattant${players.length > 1 ? "s" : ""}</span>
+      </div>
+      ${
+        players.length === 0
+          ? `<div class="empty-state">Aucun combat enregistré durant cette session.</div>`
+          : `
+        <div class="session-combat-list">
+          ${players
+            .map((p) => {
+              const key = sessionPlayerExpandKey(rec.id, p.name);
+              const isOpen = expandedSessionCombatPlayers.has(key);
+              const spells = p.spells || [];
+              return `
+                <div class="session-combat-item">
+                  <button type="button" class="session-combat-summary" data-toggle-session-player="${escapeHtml(p.name)}" aria-expanded="${isOpen ? "true" : "false"}">
+                    <div class="session-combat-left">
+                      ${renderItemThumb(p.weaponUniqueName, "icon-slot-sm", "mainHand")}
+                      <div class="meter-ident">
+                        <span class="meter-name">${escapeHtml(p.name)}${p.isSelf ? `<span class="self-tag">VOUS</span>` : ""}</span>
+                        <span class="meter-weapon">${escapeHtml(p.weaponNameFr || p.weaponUniqueName || "Arme non inspectée")}</span>
+                      </div>
+                    </div>
+                    <div class="session-combat-right">
+                      <span><strong>${formatNumber(p.damage)}</strong> dég. <small class="text-dim">(${formatNumber(p.dps, 1)}/s)</small></span>
+                      ${(p.heal || 0) > 0 ? `<span style="color: var(--heal);"><strong>${formatNumber(p.heal)}</strong> soins</span>` : ""}
+                      <span class="col-optional">Subis ${formatNumber(p.takenDamage)}</span>
+                      <span class="session-expand-hint">${isOpen ? "▾ Masquer" : `▸ ${spells.length} sort${spells.length > 1 ? "s" : ""}`}</span>
+                    </div>
+                  </button>
+                  ${
+                    isOpen
+                      ? `
+                    <div class="session-spell-drawer">
+                      ${
+                        spells.length === 0
+                          ? `<div class="empty-state">Aucun sort enregistré.</div>`
+                          : `
+                        <table class="data-table">
+                          <thead>
+                            <tr>
+                              <th>Sort</th>
+                              <th class="num-col">Coups</th>
+                              <th class="num-col">Dégâts</th>
+                              <th class="num-col col-optional">Soins</th>
+                              <th class="num-col col-optional">Overheal</th>
+                              <th class="num-col">Part</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            ${spells
+                              .map(
+                                (s) => `
+                              <tr>
+                                <td>
+                                  <span class="cell-with-icon" title="${escapeHtml(s.uniqueName)}">
+                                    ${renderSpellThumb(s)}
+                                    <strong class="truncate-text">${escapeHtml(s.nameFr)}</strong>
+                                  </span>
+                                </td>
+                                <td class="num-col mono">${s.ticks}</td>
+                                <td class="num-col mono">${formatExactInt(s.damage)}</td>
+                                <td class="num-col mono col-optional">${formatExactInt(s.heal)}</td>
+                                <td class="num-col mono col-optional">${formatExactInt(s.overhealed)}</td>
+                                <td class="num-col mono text-accent">${(s.sharePercent || 0).toFixed(1)}%</td>
+                              </tr>
+                            `,
+                              )
+                              .join("")}
+                          </tbody>
+                        </table>
+                      `
+                      }
+                    </div>
+                  `
+                      : ""
+                  }
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      `
+      }
+    </div>
+  `;
+};
+
+const renderSessionDungeonsPanel = (rec) => {
+  const runs = rec.dungeons || [];
+  return `
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-heading-group">
+          <h2>Donjons &amp; Brumes</h2>
+          <span class="sub-label">Instances parcourues, coffres et wisps</span>
+        </div>
+        <span class="badge-subtle">${runs.length} instance${runs.length > 1 ? "s" : ""}</span>
+      </div>
+      <div class="table-wrap">
+        ${
+          runs.length === 0
+            ? `<div class="empty-state">Aucun donjon ou brume enregistré durant cette session.</div>`
+            : `
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Instance</th>
+                <th>Tier</th>
+                <th class="num-col">Durée</th>
+                <th class="num-col">Renommée</th>
+                <th class="num-col">Silver</th>
+                <th class="num-col col-optional">Coffres / Wisps</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${runs
+                .map(
+                  (d) => `
+                <tr>
+                  <td>
+                    <span class="cell-with-icon">
+                      <strong>${escapeHtml(d.nameFr)}</strong>
+                      ${d.isActive ? '<span class="status-badge status-live"><span class="badge-dot"></span>En cours</span>' : ""}
+                    </span>
+                  </td>
+                  <td><span class="mono-tag">T${d.tier}</span></td>
+                  <td class="num-col mono">${formatDuration(d.durationSeconds)}</td>
+                  <td class="num-col mono">${formatNumber(d.fame)}</td>
+                  <td class="num-col mono">${formatNumber(d.silver)} Silver</td>
+                  <td class="num-col mono col-optional">${d.chestsOpened || 0} / ${d.cagedWispsOpened || 0}</td>
+                </tr>
+              `,
+                )
+                .join("")}
+            </tbody>
+          </table>
+        `
+        }
+      </div>
+    </div>
+  `;
+};
+
+const renderSessionLootPanel = (rec) => {
+  const loot = rec.lootLog || [];
+  const trades = rec.trades || [];
+  return `
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-heading-group">
+          <h2>Butin &amp; Échanges</h2>
+          <span class="sub-label">Objets ramassés, silver et échanges directs</span>
+        </div>
+        <span class="badge-subtle">${loot.length} butin${loot.length > 1 ? "s" : ""}${trades.length > 0 ? ` • ${trades.length} échange${trades.length > 1 ? "s" : ""}` : ""}</span>
+      </div>
+      <div class="table-wrap">
+        ${
+          loot.length === 0
+            ? `<div class="empty-state">Aucun butin ramassé durant cette session.</div>`
+            : `
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Joueur</th>
+                <th class="col-optional">Source</th>
+                <th>Objet</th>
+                <th class="num-col">Qté</th>
+                <th class="num-col">Estimation</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${loot
+                .map(
+                  (l) => `
+                <tr>
+                  <td><strong>${escapeHtml(l.lootedBy)}</strong></td>
+                  <td class="col-optional text-dim">${escapeHtml(l.lootedFrom)}</td>
+                  <td>
+                    <span class="cell-with-icon">
+                      ${renderItemThumb(l.uniqueName, "icon-slot-sm")}
+                      <span class="truncate-text">${escapeHtml(l.nameFr)}</span>
+                    </span>
+                  </td>
+                  <td class="num-col mono">×${formatExactInt(l.quantity)}</td>
+                  <td class="num-col mono text-accent">${formatExactInt(l.estimatedSilver)} Silver</td>
+                </tr>
+              `,
+                )
+                .join("")}
+            </tbody>
+          </table>
+        `
+        }
+      </div>
+      ${
+        trades.length > 0
+          ? `
+        <div class="panel-subheader">
+          <h3 class="sub-heading">Échanges directs</h3>
+          <span class="badge-subtle">${trades.length}</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Heure</th>
+                <th class="num-col">Silver joueur 1</th>
+                <th class="num-col">Silver joueur 2</th>
+                <th class="num-col col-optional">Taxe</th>
+                <th class="num-col">Objets</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${trades
+                .map((tr) => {
+                  const timeStr =
+                    tr.timestampMs > 0
+                      ? new Date(tr.timestampMs).toLocaleTimeString("fr-FR", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          second: "2-digit",
+                        })
+                      : "—";
+                  return `
+                  <tr>
+                    <td class="mono">${escapeHtml(timeStr)}</td>
+                    <td class="num-col mono">${formatExactInt(tr.player1Silver)} Silver</td>
+                    <td class="num-col mono">${formatExactInt(tr.player2Silver)} Silver</td>
+                    <td class="num-col mono col-optional">${formatExactInt(tr.salesTax)} Silver</td>
+                    <td class="num-col mono">${tr.itemCount || 0}</td>
+                  </tr>
+                `;
+                })
+                .join("")}
+            </tbody>
+          </table>
+        </div>
+      `
+          : ""
+      }
+    </div>
+  `;
+};
+
+const renderSessionFactionsPanel = (rec, activeOnly = false) => {
+  const allFactions = rec.factions || [];
+  const rows = activeOnly
+    ? allFactions.filter((f) => (f.coins || 0) > 0 || (f.rankPoints || 0) > 0 || (f.flagPoints || 0) > 0)
+    : allFactions;
+  return `
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-heading-group">
+          <h2>Guerre de Factions</h2>
+          <span class="sub-label">Jetons gagnés, points de rang et points de drapeau</span>
+        </div>
+        <span class="badge-subtle">Cités royales</span>
+      </div>
+      <div class="table-wrap">
+        ${
+          rows.length === 0
+            ? `<div class="empty-state">Aucune activité de guerre de factions enregistrée durant cette session.</div>`
+            : `
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Cité de Faction</th>
+                <th class="num-col">Jetons gagnés</th>
+                <th class="num-col">Points de rang</th>
+                <th class="num-col col-optional">Points de drapeau</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows
+                .map(
+                  (f) => `
+                <tr>
+                  <td>${renderCityBadge(f.city)}</td>
+                  <td class="num-col mono">${formatExactInt(f.coins)}</td>
+                  <td class="num-col mono">${formatExactInt(f.rankPoints)}</td>
+                  <td class="num-col mono col-optional">${formatExactInt(f.flagPoints)}</td>
+                </tr>
+              `,
+                )
+                .join("")}
+            </tbody>
+          </table>
+        `
+        }
+      </div>
+    </div>
+  `;
+};
+
+const renderSessionTab = (force = false) => {
   const snap = latestState?.snapshot;
+  const listEl = el("session-list-rows");
+  const headerEl = el("session-inspector-header");
+  const bodyEl = el("session-inspector-body");
+  const legacyNote = el("session-legacy-note");
+
   if (!snap) {
-    const archWrap = el("archived-session-rows");
-    if (archWrap && !archWrap.innerHTML) {
-      archWrap.innerHTML = `<div class="empty-state">Aucune session archivée. Cliquez sur <strong>Terminer &amp; enregistrer</strong> ou fermez l'application après une activité pour sauvegarder le bilan sur le disque.</div>`;
+    if (listEl && !listEl.innerHTML) {
+      listEl.innerHTML = `<div class="empty-state">En attente de télémétrie…</div>`;
     }
-    const facWrap = el("faction-rows");
-    if (facWrap && !facWrap.innerHTML) {
-      facWrap.innerHTML = `<div class="empty-state">Aucune activité de guerre de factions enregistrée.</div>`;
+    if (bodyEl && !bodyEl.innerHTML) {
+      bodyEl.innerHTML = `<div class="empty-state">Lancez Albion Online ou rechargez une session pour afficher l'historique complet.</div>`;
     }
     return;
   }
-  const s = snap.session;
-  const lp = snap.localPlayer;
 
-  el("sess-elapsed").textContent = formatDuration(s.elapsedSeconds);
-  el("sess-packets").textContent = formatExactInt(snap.network.packetsProcessed);
-  el("sess-events").textContent = formatExactInt(snap.network.telemetryEventsProcessed);
+  const liveStats = snap.session || {};
+  const lp = snap.localPlayer || {};
+  el("sess-elapsed").textContent = formatDuration(liveStats.elapsedSeconds || 0);
+  el("sess-packets").textContent = formatExactInt(snap.network?.packetsProcessed || 0);
+  el("sess-events").textContent = formatExactInt(snap.network?.telemetryEventsProcessed || 0);
 
-  el("kpi-fame").textContent = formatNumber(s.fame);
-  el("kpi-fame-hr").textContent = `${formatNumber(s.famePerHour)} / heure`;
-  el("kpi-fame-extra").textContent = `Zone : ${formatNumber(s.zoneFame)} • Sacoche : ${formatNumber(s.satchelFame)}`;
+  let rec = normalizeSessionRecord(snap, selectedSessionId);
+  if (rec.id !== selectedSessionId) {
+    selectedSessionId = rec.id;
+  }
 
-  el("kpi-silver").textContent = `${formatNumber(s.silver)} Silver`;
-  el("kpi-silver-hr").textContent = `${formatNumber(s.silverPerHour)} Silver / h`;
-  el("kpi-silver-tax").textContent = `Taxe guilde : ${formatNumber(s.guildTaxPaid)} • Réparations : ${formatNumber(s.repairCosts)}`;
+  el("kpi-fame").textContent = formatNumber(rec.fame);
+  el("kpi-fame-hr").textContent = `${formatNumber(rec.famePerHour)} / heure`;
+  el("kpi-fame-extra").textContent = `Zone : ${formatNumber(rec.zoneFame)} • Sacoche : ${formatNumber(rec.satchelFame)}`;
 
-  el("kpi-respec").textContent = formatNumber(s.respecPoints);
-  el("kpi-respec-hr").textContent = `${formatNumber(s.respecPerHour)} / heure`;
-  el("kpi-respec-cost").textContent = `Silver payé : ${formatNumber(s.respecPaidSilver)} Silver`;
+  el("kpi-silver").textContent = `${formatNumber(rec.silver)} Silver`;
+  el("kpi-silver-hr").textContent = `${formatNumber(rec.silverPerHour)} Silver / h`;
+  el("kpi-silver-tax").textContent = `Taxe guilde : ${formatNumber(rec.guildTaxPaid)} • Réparations : ${formatNumber(rec.repairCosts)}`;
 
-  el("kpi-might").textContent = `${formatNumber(s.might)} Might`;
-  el("kpi-favor").textContent = `${formatNumber(s.favor)} Faveur`;
-  el("kpi-might-hr").textContent = `${formatNumber(s.mightPerHour)} Might/h • ${formatNumber(s.favorPerHour)} Faveur/h`;
+  el("kpi-respec").textContent = formatNumber(rec.respecPoints);
+  el("kpi-respec-hr").textContent = `${formatNumber(rec.respecPerHour)} / heure`;
+  el("kpi-respec-cost").textContent = `Silver payé : ${formatNumber(rec.respecPaidSilver)} Silver`;
 
-  el("kpi-kd").textContent = `${s.kills} K / ${s.deaths} D`;
-  el("kpi-focus").textContent = `Focus : ${formatExactInt(lp.focusPoints)} / ${formatExactInt(lp.maxFocusPoints)}`;
-  el("kpi-season").textContent = `Points GvG : ${s.seasonPoints} • LP : ${formatExactInt(lp.learningPoints)}`;
+  el("kpi-might").textContent = `${formatNumber(rec.might)} Might`;
+  el("kpi-favor").textContent = `${formatNumber(rec.favor)} Faveur`;
+  el("kpi-might-hr").textContent = `${formatNumber(rec.mightPerHour)} Might/h • ${formatNumber(rec.favorPerHour)} Faveur/h`;
+
+  el("kpi-kd").textContent = `${rec.kills} K / ${rec.deaths} D`;
+  if (rec.isLive) {
+    el("kpi-focus").textContent = `Focus : ${formatExactInt(lp.focusPoints || 0)} / ${formatExactInt(lp.maxFocusPoints || 30000)}`;
+    el("kpi-season").textContent = `Points GvG : ${rec.seasonPoints} • LP : ${formatExactInt(lp.learningPoints || 0)}`;
+  } else {
+    el("kpi-focus").textContent = `Récolte : ${formatExactInt(rec.gatheringTotals.totalResources)} res. (${rec.gatheringTotals.totalNodes || 0} nœuds)`;
+    el("kpi-season").textContent = `${rec.zones.length} zone(s) • ${rec.dungeons.length} instance(s) • GvG : ${rec.seasonPoints}`;
+  }
 
   const archived = snap.archivedSessions || [];
   const archBadge = el("archived-session-badge");
   if (archBadge) {
-    archBadge.textContent = `${archived.length} session${archived.length > 1 ? "s" : ""}`;
+    archBadge.textContent = `${archived.length} archivée${archived.length > 1 ? "s" : ""}`;
   }
-  const archWrap = el("archived-session-rows");
-  if (archWrap) {
-    if (archived.length === 0) {
-      archWrap.innerHTML = `<div class="empty-state">Aucune session archivée. Cliquez sur <strong>Terminer &amp; enregistrer</strong> ou fermez l'application après une activité pour sauvegarder le bilan sur le disque.</div>`;
-    } else {
-      archWrap.innerHTML = `
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Session</th>
-              <th class="num-col">Renommée</th>
-              <th class="num-col">Silver</th>
-              <th class="num-col col-optional">Bilan</th>
-              <th class="num-col"></th>
-            </tr>
-          </thead>
-          <tbody>
-            ${archived
-              .map((a) => {
-                const dateStr =
-                  a.endedAtMs > 0
-                    ? new Date(a.endedAtMs).toLocaleString("fr-FR", {
-                        day: "2-digit",
-                        month: "2-digit",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })
-                    : "—";
-                const extraParts = [`${a.kills || 0}K/${a.deaths || 0}D`];
-                if ((a.might || 0) > 0) extraParts.push(`${formatNumber(a.might)} M`);
-                return `
-              <tr>
-                <td>
-                  <div class="item-text-group">
-                    <strong class="item-display-name">${escapeHtml(a.label)}</strong>
-                    <span class="item-id-sub mono">${escapeHtml(dateStr)} • ${formatDuration(a.durationSeconds)}</span>
-                  </div>
-                </td>
-                <td class="num-col mono">
-                  <div class="session-stat-stack">
-                    <span>${formatNumber(a.fame)}</span>
-                    <small class="session-stat-sub">${formatNumber(a.famePerHour)}/h</small>
-                  </div>
-                </td>
-                <td class="num-col mono">
-                  <div class="session-stat-stack">
-                    <span>${formatNumber(a.silver)} <span class="currency-tag">Silver</span></span>
-                    <small class="session-stat-sub">${formatNumber(a.silverPerHour)}/h</small>
-                  </div>
-                </td>
-                <td class="num-col mono col-optional">${escapeHtml(extraParts.join(" • "))}</td>
-                <td class="num-col">
-                  <button
-                    class="btn btn-danger-subtle btn-xs btn-icon-xs"
-                    type="button"
-                    data-del-archived-session="${escapeHtml(a.id)}"
-                    title="Supprimer cette session de l'historique"
-                    aria-label="Supprimer la session"
-                  >
-                    <svg class="ico"><use href="#ico-trash"></use></svg>
-                  </button>
-                </td>
-              </tr>
-            `;
-              })
-              .join("")}
-          </tbody>
-        </table>
-      `;
+
+  const liveRec = normalizeSessionRecord(snap, "live");
+  const sidebarKey = JSON.stringify([
+    selectedSessionId,
+    liveRec.mapNameFr,
+    Math.floor(liveRec.durationSeconds),
+    Math.round(liveRec.fame),
+    Math.round(liveRec.silver),
+    liveRec.gatheringTotals.totalResources,
+    archived.map((a) => [
+      a.id,
+      a.label,
+      a.endedAtMs,
+      Math.round(a.durationSeconds),
+      Math.round(a.fame),
+      Math.round(a.silver),
+      a.gatheringTotals?.totalResources || 0,
+    ]),
+  ]);
+
+  if (listEl && !shouldSkipRender("session-sidebar", sidebarKey, force)) {
+    const liveCard = `
+      <div class="session-list-item ${selectedSessionId === "live" ? "is-selected" : ""}" role="button" tabindex="0" data-select-session="live">
+        <div class="session-list-head">
+          <span class="session-list-title">Session en direct</span>
+          <span class="status-badge status-live"><span class="badge-dot"></span>En cours</span>
+        </div>
+        <div class="session-list-meta">
+          <span>${escapeHtml(liveRec.mapNameFr)}</span>
+          <span>•</span>
+          <span class="mono">${formatDuration(liveRec.durationSeconds)}</span>
+        </div>
+        <div class="session-list-kpis">
+          <span>${formatNumber(liveRec.fame)} Fame</span>
+          <span>${formatNumber(liveRec.silver)} S</span>
+          <span>${formatExactInt(liveRec.gatheringTotals.totalResources)} rés.</span>
+        </div>
+      </div>
+    `;
+    const archivedCards = archived
+      .map((a) => {
+        const resCount = a.gatheringTotals?.totalResources || 0;
+        const zoneCount = Array.isArray(a.zones) ? a.zones.length : 0;
+        return `
+          <div class="session-list-item ${selectedSessionId === a.id ? "is-selected" : ""}" role="button" tabindex="0" data-select-session="${escapeHtml(a.id)}">
+            <div class="session-list-head">
+              <span class="session-list-title" title="${escapeHtml(a.label)}">${escapeHtml(a.label)}</span>
+              <button
+                class="btn btn-danger-subtle btn-xs btn-icon-xs"
+                type="button"
+                data-del-archived-session="${escapeHtml(a.id)}"
+                title="Supprimer cette session de l'historique"
+                aria-label="Supprimer la session"
+              >
+                <svg class="ico"><use href="#ico-trash"></use></svg>
+              </button>
+            </div>
+            <div class="session-list-meta">
+              <span>${escapeHtml(formatShortDateTime(a.endedAtMs))}</span>
+              <span>•</span>
+              <span class="mono">${formatDuration(a.durationSeconds)}</span>
+              ${zoneCount > 0 ? `<span>• ${zoneCount} zone${zoneCount > 1 ? "s" : ""}</span>` : ""}
+            </div>
+            <div class="session-list-kpis">
+              <span>${formatNumber(a.fame)} Fame</span>
+              <span>${formatNumber(a.silver)} S</span>
+              <span>${formatExactInt(resCount)} rés.</span>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+    listEl.innerHTML = `${liveCard}${archivedCards}`;
+  }
+
+  if (headerEl) {
+    const timeSummary = rec.isLive
+      ? `Zone actuelle : <strong>${escapeHtml(rec.mapNameFr)}</strong> • Durée : <span class="mono">${formatDuration(rec.durationSeconds)}</span>`
+      : `Du <span class="mono">${escapeHtml(formatShortDateTime(rec.startedAtMs))}</span> au <span class="mono">${escapeHtml(formatShortDateTime(rec.endedAtMs))}</span> • Dernière zone : <strong>${escapeHtml(rec.mapNameFr)}</strong> • Durée : <span class="mono">${formatDuration(rec.durationSeconds)}</span>`;
+    const statusPill = rec.isLive
+      ? `<span class="status-badge status-live"><span class="badge-dot"></span>Active</span>`
+      : `<span class="badge-subtle">Archivée</span>`;
+    headerEl.innerHTML = `
+      <div class="session-inspector-title-group">
+        <div class="session-inspector-heading">
+          <h2>${escapeHtml(rec.label)}</h2>
+          ${statusPill}
+        </div>
+        <div class="session-inspector-sub">${timeSummary}</div>
+      </div>
+      <div class="inline-controls">
+        <span class="badge-subtle">${rec.zones.length} zone(s)</span>
+        <span class="badge-subtle">${formatExactInt(rec.gatheringTotals.totalResources)} récolte(s)</span>
+        <span class="badge-subtle">${rec.lootLog.length} butin(s)</span>
+      </div>
+    `;
+  }
+
+  if (legacyNote) {
+    legacyNote.hidden = !rec.isLegacySummaryOnly;
+  }
+
+  const activeFactionCount = rec.factions.filter(
+    (f) => (f.coins || 0) > 0 || (f.rankPoints || 0) > 0 || (f.flagPoints || 0) > 0,
+  ).length;
+  el("subtab-count-zones").textContent = String(rec.zones.length);
+  el("subtab-count-gathering").textContent = formatExactInt(rec.gatheringTotals.totalResources);
+  el("subtab-count-combat").textContent = String(rec.combatPlayers.length);
+  el("subtab-count-dungeons").textContent = String(rec.dungeons.length);
+  el("subtab-count-loot").textContent = String(rec.lootLog.length + rec.trades.length);
+  el("subtab-count-factions").textContent = String(activeFactionCount);
+
+  document.querySelectorAll("#session-subtabs .seg-btn[data-session-subtab]").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-session-subtab") === activeSessionSubtab);
+  });
+
+  if (!bodyEl) return;
+  const bodyKey = JSON.stringify([
+    rec.id,
+    activeSessionSubtab,
+    [...expandedSessionCombatPlayers].sort(),
+    rec.zones,
+    rec.gatheringTotals,
+    rec.gatheringLog,
+    rec.combatPlayers,
+    rec.dungeons,
+    rec.lootLog,
+    rec.trades,
+    rec.factions,
+  ]);
+  if (shouldSkipRender("session-body", bodyKey, force)) {
+    return;
+  }
+
+  let sectionsHtml = "";
+  switch (activeSessionSubtab) {
+    case "zones":
+      sectionsHtml = renderSessionZonesPanel(rec);
+      break;
+    case "gathering":
+      sectionsHtml = renderSessionGatheringPanel(rec);
+      break;
+    case "combat":
+      sectionsHtml = renderSessionCombatPanel(rec);
+      break;
+    case "dungeons":
+      sectionsHtml = renderSessionDungeonsPanel(rec);
+      break;
+    case "loot":
+      sectionsHtml = renderSessionLootPanel(rec);
+      break;
+    case "factions":
+      sectionsHtml = renderSessionFactionsPanel(rec, false);
+      break;
+    case "all":
+    default: {
+      const blocks = [];
+      blocks.push(renderSessionZonesPanel(rec));
+      blocks.push(renderSessionGatheringPanel(rec));
+      if (rec.combatPlayers.length > 0) blocks.push(renderSessionCombatPanel(rec));
+      if (rec.dungeons.length > 0) blocks.push(renderSessionDungeonsPanel(rec));
+      if (rec.lootLog.length > 0 || rec.trades.length > 0) blocks.push(renderSessionLootPanel(rec));
+      if (activeFactionCount > 0) blocks.push(renderSessionFactionsPanel(rec, true));
+      sectionsHtml = blocks.join("");
+      break;
     }
   }
-
-  el("faction-rows").innerHTML = `
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Cité de Faction</th>
-          <th class="num-col">Jetons gagnés</th>
-          <th class="num-col">Points de rang</th>
-          <th class="num-col col-optional">Points de drapeau</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${(s.factions || [])
-          .map(
-            (f) => `
-          <tr>
-            <td>${renderCityBadge(f.city)}</td>
-            <td class="num-col mono">${formatExactInt(f.coins)}</td>
-            <td class="num-col mono">${formatExactInt(f.rankPoints)}</td>
-            <td class="num-col mono col-optional">${formatExactInt(f.flagPoints)}</td>
-          </tr>
-        `,
-          )
-          .join("")}
-      </tbody>
-    </table>
-  `;
+  bodyEl.innerHTML = sectionsHtml;
+  hydrateLoadedImages(bodyEl);
 };
 
-const renderDungeonsTab = () => {
+const renderDungeonsTab = (force = false) => {
   const runs = latestState?.snapshot?.dungeons || [];
   el("dungeon-count-badge").textContent = `${runs.length} instance${runs.length > 1 ? "s" : ""}`;
+  const renderKey = JSON.stringify(runs);
+  if (shouldSkipRender("dungeons", renderKey, force)) {
+    return;
+  }
+
   const wrap = el("dungeon-rows");
   if (runs.length === 0) {
     wrap.innerHTML = `<div class="empty-state">Aucun donjon ou brume parcouru durant cette session.</div>`;
@@ -721,7 +1365,7 @@ const renderDungeonsTab = () => {
   `;
 };
 
-const renderGatheringTab = () => {
+const renderGatheringTab = (force = false) => {
   const snap = latestState?.snapshot;
   if (!snap) {
     const gWrap = el("gathering-rows");
@@ -740,12 +1384,18 @@ const renderGatheringTab = () => {
   el("gathering-summary-badge").textContent = `${formatExactInt(t.totalResources)} ressources (${t.totalNodes} nœuds) • ~${formatNumber(t.totalEstimatedSilver)} Silver`;
 
   const log = snap.gatheringLog || [];
-  if (log.length === 0) {
-    el("gathering-rows").innerHTML = `<div class="empty-state">Aucune récolte enregistrée durant cette session.</div>`;
+  const renderKey = JSON.stringify(log);
+  if (shouldSkipRender("gathering", renderKey, force)) {
     return;
   }
 
-  el("gathering-rows").innerHTML = `
+  const wrap = el("gathering-rows");
+  if (log.length === 0) {
+    wrap.innerHTML = `<div class="empty-state">Aucune récolte enregistrée durant cette session.</div>`;
+    return;
+  }
+
+  wrap.innerHTML = `
     <table class="data-table">
       <thead>
         <tr>
@@ -782,16 +1432,25 @@ const renderGatheringTab = () => {
       </tbody>
     </table>
   `;
+  hydrateLoadedImages(wrap);
 };
 
-const renderLootAndInspectTab = () => {
+const renderLootAndInspectTab = (force = false) => {
   const snap = latestState?.snapshot;
   const players = snap?.inspectedPlayers || [];
+  const loot = snap?.lootLog || [];
   el("inspect-count-badge").textContent = `${players.length} joueur${players.length > 1 ? "s" : ""}`;
+
+  const renderKey = JSON.stringify([players, loot]);
+  if (shouldSkipRender("loot-inspect", renderKey, force)) {
+    return;
+  }
+
+  const cardsWrap = el("inspect-cards");
   if (players.length === 0) {
-    el("inspect-cards").innerHTML = `<div class="empty-state">Aucun membre du groupe détecté.</div>`;
+    cardsWrap.innerHTML = `<div class="empty-state">Aucun membre du groupe détecté.</div>`;
   } else {
-    el("inspect-cards").innerHTML = players
+    cardsWrap.innerHTML = players
       .map(
         (p) => `
       <div class="inspect-card">
@@ -821,13 +1480,14 @@ const renderLootAndInspectTab = () => {
     `,
       )
       .join("");
+    hydrateLoadedImages(cardsWrap);
   }
 
-  const loot = snap?.lootLog || [];
+  const lootWrap = el("loot-rows");
   if (loot.length === 0) {
-    el("loot-rows").innerHTML = `<div class="empty-state">Aucun butin ramassé.</div>`;
+    lootWrap.innerHTML = `<div class="empty-state">Aucun butin ramassé.</div>`;
   } else {
-    el("loot-rows").innerHTML = `
+    lootWrap.innerHTML = `
       <table class="data-table">
         <thead>
           <tr>
@@ -851,7 +1511,7 @@ const renderLootAndInspectTab = () => {
                   <span class="truncate-text">${escapeHtml(l.nameFr)}</span>
                 </span>
               </td>
-              <td class="num-col mono">×${l.quantity}</td>
+              <td class="num-col mono">×${formatExactInt(l.quantity)}</td>
               <td class="num-col mono text-accent">${formatExactInt(l.estimatedSilver)} Silver</td>
             </tr>
           `,
@@ -860,10 +1520,11 @@ const renderLootAndInspectTab = () => {
         </tbody>
       </table>
     `;
+    hydrateLoadedImages(lootWrap);
   }
 };
 
-const renderCapturedMarketOrders = () => {
+const renderCapturedMarketOrders = (force = false) => {
   const snap = latestState?.snapshot;
   const orders = snap?.marketOrders || [];
   const mails = snap?.mailNotifications || [];
@@ -871,8 +1532,14 @@ const renderCapturedMarketOrders = () => {
   const badge = el("market-orders-badge");
   if (badge) badge.textContent = `${total} capture${total > 1 ? "s" : ""}`;
 
+  const renderKey = JSON.stringify([orders, mails]);
+  if (shouldSkipRender("captured-market", renderKey, force)) {
+    return;
+  }
+
+  const wrap = el("captured-market-rows");
   if (orders.length === 0 && mails.length === 0) {
-    el("captured-market-rows").innerHTML = `
+    wrap.innerHTML = `
       <div class="empty-state empty-market-state">
         <div class="empty-title">Aucun ordre ou courrier capturé</div>
         <div class="empty-hint">Ouvrez l'Hôtel des Ventes ou vos courriers en jeu pour capturer automatiquement vos transactions.</div>
@@ -881,7 +1548,7 @@ const renderCapturedMarketOrders = () => {
     return;
   }
 
-  el("captured-market-rows").innerHTML = `
+  wrap.innerHTML = `
     <table class="data-table">
       <thead>
         <tr>
@@ -932,6 +1599,7 @@ const renderCapturedMarketOrders = () => {
       </tbody>
     </table>
   `;
+  hydrateLoadedImages(wrap);
 };
 
 const computeCraftingFallback = (input) => {
@@ -1287,6 +1955,7 @@ const fetchAlbionDataPrices = async (customItems = null, qtyByItem = null) => {
         </tbody>
       </table>
     `;
+    hydrateLoadedImages(wrap);
   } catch (err) {
     wrap.innerHTML = `<div class="empty-state">API hors-ligne ou indisponible (${escapeHtml(err.message || err)}).</div>`;
   }
@@ -1346,6 +2015,7 @@ const renderRecipeBreakdown = (recipe, evalRes = null) => {
     </div>
   `;
   box.hidden = false;
+  hydrateLoadedImages(box);
 };
 
 const loadAndPriceCraftingRecipe = async (ctx, showFeedbackToast = false) => {
@@ -1508,14 +2178,19 @@ const runMarketSearch = async (query) => {
       `,
       )
       .join("");
+    hydrateLoadedImages(box);
   }
   box.hidden = false;
 };
 
-const syncCatalogFromGitHub = async () => {
+const syncCatalogFromGitHub = async ({ silent = false } = {}) => {
+  if (catalogSyncInFlight) return;
+  catalogSyncInFlight = true;
   const btn = el("btn-sync-catalog");
   if (btn) btn.disabled = true;
-  showToast("Synchronisation de la base Albion (ao-bin-dumps : objets, recettes, zones et sorts)…");
+  if (!silent) {
+    showToast("Synchronisation de la base Albion (ao-bin-dumps : objets, recettes, zones et sorts)…");
+  }
   try {
     const base = "https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master";
     const [itemsResp, worldResp, spellsResp, itemsXmlResp] = await Promise.all([
@@ -1538,51 +2213,61 @@ const syncCatalogFromGitHub = async () => {
     itemInfoCache.clear();
     await refreshState(true);
     const spellCount = latestState?.snapshot?.catalogSpellCount || 0;
+    const clusterCount = latestState?.snapshot?.catalogClusterCount || 0;
     const recipeCount = latestState?.snapshot?.catalogRecipeCount || 0;
-    showToast(
-      `Catalogue synchronisé (+${formatExactInt(added || 0)} entrées, ${formatExactInt(spellCount)} sorts, ${formatExactInt(recipeCount)} recettes).`,
-    );
+    if (!silent || (added || 0) > 0) {
+      showToast(
+        silent
+          ? `Base Albion complétée automatiquement (${formatExactInt(clusterCount)} zones, ${formatExactInt(spellCount)} sorts, ${formatExactInt(recipeCount)} recettes).`
+          : `Catalogue synchronisé (+${formatExactInt(added || 0)} entrées, ${formatExactInt(clusterCount)} zones, ${formatExactInt(spellCount)} sorts, ${formatExactInt(recipeCount)} recettes).`,
+      );
+    }
   } catch (err) {
-    showToast(`Échec synchronisation ao-bin-dumps : ${err.message || err}`);
+    if (silent) {
+      console.warn("Synchronisation auto ao-bin-dumps ignorée :", err);
+    } else {
+      showToast(`Échec synchronisation ao-bin-dumps : ${err.message || err}`);
+    }
   } finally {
+    catalogSyncInFlight = false;
     if (btn) btn.disabled = false;
   }
 };
 
-const renderActiveTab = () => {
+const renderActiveTab = (force = false) => {
   switch (activeTab) {
     case "session":
-      renderSessionTab();
+      renderSessionTab(force);
       break;
     case "dungeons":
-      renderDungeonsTab();
+      renderDungeonsTab(force);
       break;
     case "gathering":
-      renderGatheringTab();
+      renderGatheringTab(force);
       break;
     case "loot":
-      renderLootAndInspectTab();
+      renderLootAndInspectTab(force);
       break;
     case "economy":
-      renderCapturedMarketOrders();
+      renderCapturedMarketOrders(force);
       break;
     case "combat":
     default:
       renderSnapshotSelect();
-      renderCombatTab();
+      renderCombatTab(force);
       break;
   }
 };
 
-const renderAll = () => {
+const renderAll = (force = false) => {
   renderHeader();
   renderSnapshotSelect();
-  renderCombatTab();
-  renderSessionTab();
-  renderDungeonsTab();
-  renderGatheringTab();
-  renderLootAndInspectTab();
-  renderCapturedMarketOrders();
+  renderCombatTab(force);
+  renderSessionTab(force);
+  renderDungeonsTab(force);
+  renderGatheringTab(force);
+  renderLootAndInspectTab(force);
+  renderCapturedMarketOrders(force);
 };
 
 const computeStateSignature = (res) => {
@@ -1598,6 +2283,22 @@ const computeStateSignature = (res) => {
     s.catalogItemCount || 0,
     s.catalogSpellCount || 0,
     s.catalogRecipeCount || 0,
+    s.catalogClusterCount || 0,
+    s.catalogWeaponSpellCount || 0,
+    s.localPlayer?.username || "",
+    s.localPlayer?.currentMapIndex || "",
+    s.localPlayer?.currentMapNameFr || "",
+    Math.round(s.localPlayer?.silver || 0),
+    Math.round(s.session?.fame || 0),
+    Math.round(s.session?.silver || 0),
+    s.gatheringTotals?.totalResources || 0,
+    s.dungeons?.length || 0,
+    s.lootLog?.length || 0,
+    s.inspectedPlayers?.length || 0,
+    s.liveSessionZones?.length || 0,
+    s.marketOrders?.length || 0,
+    s.mailNotifications?.length || 0,
+    s.trades?.length || 0,
     s.snapshots?.length || 0,
     s.archivedSessions?.length || 0,
     s.localPlayer?.inCombat ? Math.floor(s.combatSeconds || 0) : 0,
@@ -1614,10 +2315,10 @@ const refreshState = async (force = false) => {
   }
   lastStateSignature = sig;
   if (force) {
-    renderAll();
+    renderAll(true);
   } else {
     renderHeader();
-    renderActiveTab();
+    renderActiveTab(false);
   }
 };
 
@@ -1631,8 +2332,16 @@ const initEvents = () => {
       document.querySelectorAll(".tab-panel").forEach((p) => {
         p.classList.toggle("active", p.id === `tab-${target}`);
       });
-      renderActiveTab();
+      renderActiveTab(false);
     });
+  });
+
+  // Combat meter row selection delegation (avoids DOM rebuild listener churn)
+  el("meter-rows")?.addEventListener("click", (ev) => {
+    const row = ev.target.closest(".meter-row");
+    if (!row) return;
+    selectedPlayerName = row.getAttribute("data-player-name");
+    renderCombatTab(true);
   });
 
   // Meter mode segmented control
@@ -1643,7 +2352,7 @@ const initEvents = () => {
         .querySelectorAll(".seg-btn[data-meter-mode]")
         .forEach((b) => b.classList.toggle("active", b === btn));
       persistSettings();
-      renderCombatTab();
+      renderCombatTab(true);
     });
   });
 
@@ -1651,7 +2360,7 @@ const initEvents = () => {
   el("snapshot-select")?.addEventListener("change", (ev) => {
     selectedSnapshotId = ev.target.value || "live";
     renderSnapshotSelect();
-    renderCombatTab();
+    renderCombatTab(true);
   });
 
   el("btn-delete-snapshot")?.addEventListener("click", async () => {
@@ -1674,7 +2383,7 @@ const initEvents = () => {
   });
 
   el("btn-sync-catalog")?.addEventListener("click", () => {
-    syncCatalogFromGitHub();
+    syncCatalogFromGitHub({ silent: false });
   });
 
   el("btn-compact")?.addEventListener("click", async () => {
@@ -1734,7 +2443,7 @@ const initEvents = () => {
       latestState = res;
       selectedSnapshotId = "live";
       lastStateSignature = computeStateSignature(res);
-      renderAll();
+      renderAll(true);
       showToast("Compteur de combat réinitialisé.");
     }
   });
@@ -1742,6 +2451,7 @@ const initEvents = () => {
   el("btn-archive-session")?.addEventListener("click", async () => {
     const archived = await invokeCmd("archive_session", { label: null });
     if (archived) {
+      selectedSessionId = archived.id || "live";
       await refreshState(true);
       showToast(
         `Session enregistrée : ${archived.label} (${formatNumber(archived.fame)} Fame • ${formatNumber(archived.silver)} Silver).`,
@@ -1751,24 +2461,72 @@ const initEvents = () => {
     }
   });
 
-  el("archived-session-rows")?.addEventListener("click", async (ev) => {
-    const btn = ev.target.closest("[data-del-archived-session]");
-    if (!btn) return;
-    const id = btn.getAttribute("data-del-archived-session");
+  const handleSelectSessionRow = (row) => {
+    const id = row?.getAttribute("data-select-session");
     if (!id) return;
-    const deleted = await invokeCmd("delete_archived_session", { id });
-    if (deleted) {
-      await refreshState(true);
-      showToast("Session archivée supprimée.");
+    selectedSessionId = id;
+    renderSessionTab(true);
+  };
+
+  el("session-list-rows")?.addEventListener("click", async (ev) => {
+    const delBtn = ev.target.closest("[data-del-archived-session]");
+    if (delBtn) {
+      ev.stopPropagation();
+      const id = delBtn.getAttribute("data-del-archived-session");
+      if (!id) return;
+      const deleted = await invokeCmd("delete_archived_session", { id });
+      if (deleted) {
+        if (selectedSessionId === id) {
+          selectedSessionId = "live";
+        }
+        await refreshState(true);
+        showToast("Session archivée supprimée.");
+      }
+      return;
     }
+    const row = ev.target.closest("[data-select-session]");
+    if (row) handleSelectSessionRow(row);
+  });
+
+  el("session-list-rows")?.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter" && ev.key !== " ") return;
+    if (ev.target.closest("button")) return;
+    const row = ev.target.closest("[data-select-session]");
+    if (row) {
+      ev.preventDefault();
+      handleSelectSessionRow(row);
+    }
+  });
+
+  el("session-subtabs")?.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".seg-btn[data-session-subtab]");
+    if (!btn) return;
+    activeSessionSubtab = btn.getAttribute("data-session-subtab") || "all";
+    renderSessionTab(true);
+  });
+
+  el("session-inspector-body")?.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-toggle-session-player]");
+    if (!btn) return;
+    const playerName = btn.getAttribute("data-toggle-session-player");
+    if (!playerName) return;
+    const key = sessionPlayerExpandKey(selectedSessionId, playerName);
+    if (expandedSessionCombatPlayers.has(key)) {
+      expandedSessionCombatPlayers.delete(key);
+    } else {
+      expandedSessionCombatPlayers.add(key);
+    }
+    renderSessionTab(true);
   });
 
   el("btn-reset-session")?.addEventListener("click", async () => {
     const res = await invokeCmd("reset_session");
     if (res) {
       latestState = res;
+      selectedSessionId = "live";
+      expandedSessionCombatPlayers.clear();
       lastStateSignature = computeStateSignature(res);
-      renderAll();
+      renderAll(true);
       showToast("Session réinitialisée (Fame, Silver, Donjons, Récolte et Butin remis à zéro).");
     }
   });
@@ -1777,7 +2535,8 @@ const initEvents = () => {
     const res = await invokeCmd("clear_dungeons");
     if (res) {
       latestState = res;
-      renderAll();
+      lastStateSignature = computeStateSignature(res);
+      renderAll(true);
       showToast("Historique des donjons et brumes effacé.");
     }
   });
@@ -1786,7 +2545,8 @@ const initEvents = () => {
     const res = await invokeCmd("clear_gathering");
     if (res) {
       latestState = res;
-      renderAll();
+      lastStateSignature = computeStateSignature(res);
+      renderAll(true);
       showToast("Journal et totaux de récolte effacés.");
     }
   });
@@ -1795,7 +2555,8 @@ const initEvents = () => {
     const res = await invokeCmd("clear_loot");
     if (res) {
       latestState = res;
-      renderAll();
+      lastStateSignature = computeStateSignature(res);
+      renderAll(true);
       showToast("Journal de butin effacé.");
     }
   });
@@ -1804,7 +2565,8 @@ const initEvents = () => {
     const res = await invokeCmd("clear_market_data");
     if (res) {
       latestState = res;
-      renderAll();
+      lastStateSignature = computeStateSignature(res);
+      renderAll(true);
       showToast("Ordres de marché et courriers capturés effacés.");
     }
   });
@@ -1817,7 +2579,7 @@ const initEvents = () => {
     settings.trackedItems = [];
     lastPriceRows = [];
     await persistSettings();
-    renderMarketPrices();
+    await fetchAlbionDataPrices();
     showToast("Tous les objets suivis ont été retirés.");
   });
 
@@ -1971,6 +2733,19 @@ const boot = async () => {
       settings.trackedItems.length > 0
         ? `<div class="empty-state">${settings.trackedItems.length} objet(s) suivi(s). Cliquez sur <strong>Actualiser</strong> ou recherchez un objet pour l'ajouter.</div>`
         : `<div class="empty-state">Aucun objet suivi. Utilisez la barre de recherche ci-dessus pour ajouter des objets du marché à surveiller.</div>`;
+  }
+
+  const snap = latestState?.snapshot;
+  if (
+    tauriCore?.invoke &&
+    snap &&
+    !catalogAutoSyncAttempted &&
+    ((snap.catalogClusterCount || 0) < 100 ||
+      (snap.catalogSpellCount || 0) < 200 ||
+      (snap.catalogWeaponSpellCount || 0) < 100)
+  ) {
+    catalogAutoSyncAttempted = true;
+    syncCatalogFromGitHub({ silent: true });
   }
 
   setInterval(() => refreshState(false), settings.autoRefreshMs);
