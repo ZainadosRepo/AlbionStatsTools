@@ -18,6 +18,7 @@ const MAX_DUNGEON_RUNS: usize = 60;
 const MAX_MARKET_ENTRIES: usize = 150;
 const MAX_SNAPSHOTS: usize = 30;
 const MAX_ARCHIVED_SESSIONS: usize = 30;
+const MAX_SESSION_ZONES: usize = 100;
 const LOOT_DEDUP_WINDOW_MS: u64 = 2_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -276,6 +277,24 @@ pub struct NetworkDiagnostics {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionZoneSummary {
+    pub cluster_index: String,
+    pub name_fr: String,
+    pub name_en: String,
+    pub kind: String,
+    pub tier: u8,
+    pub entered_at_ms: u64,
+    pub duration_seconds: f64,
+    pub fame: f64,
+    pub silver: f64,
+    pub gathering_nodes: u32,
+    pub gathering_resources: i64,
+    pub kills: u32,
+    pub deaths: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchivedSession {
     pub id: String,
     pub label: String,
@@ -292,6 +311,36 @@ pub struct ArchivedSession {
     pub favor: f64,
     pub kills: u32,
     pub deaths: u32,
+    #[serde(default)]
+    pub zone_fame: f64,
+    #[serde(default)]
+    pub satchel_fame: f64,
+    #[serde(default)]
+    pub respec_paid_silver: f64,
+    #[serde(default)]
+    pub guild_tax_paid: f64,
+    #[serde(default)]
+    pub cluster_tax_paid: f64,
+    #[serde(default)]
+    pub repair_costs: f64,
+    #[serde(default)]
+    pub season_points: i32,
+    #[serde(default)]
+    pub factions: Vec<FactionCitySummary>,
+    #[serde(default)]
+    pub zones: Vec<SessionZoneSummary>,
+    #[serde(default)]
+    pub combat_players: Vec<DamageMeterPlayer>,
+    #[serde(default)]
+    pub dungeons: Vec<DungeonRun>,
+    #[serde(default)]
+    pub gathering_totals: GatheringTotals,
+    #[serde(default)]
+    pub gathering_log: Vec<GatheringEntry>,
+    #[serde(default)]
+    pub loot_log: Vec<LootLogEntry>,
+    #[serde(default)]
+    pub trades: Vec<TradeLogEntry>,
 }
 
 /// Complete immutable snapshot returned to the UI on poll or command completion.
@@ -302,6 +351,10 @@ pub struct AppSnapshot {
     pub catalog_item_count: usize,
     pub catalog_spell_count: usize,
     pub catalog_recipe_count: usize,
+    #[serde(default)]
+    pub catalog_cluster_count: usize,
+    #[serde(default)]
+    pub catalog_weapon_spell_count: usize,
     pub local_player: LocalPlayerProfile,
     pub combat_seconds: f64,
     pub total_party_damage: i64,
@@ -319,6 +372,20 @@ pub struct AppSnapshot {
     pub market_orders: Vec<MarketOrderEntry>,
     pub mail_notifications: Vec<MailNotificationEntry>,
     pub trades: Vec<TradeLogEntry>,
+    #[serde(default)]
+    pub live_session_zones: Vec<SessionZoneSummary>,
+    #[serde(default)]
+    pub live_session_combat_players: Vec<DamageMeterPlayer>,
+    #[serde(default)]
+    pub live_session_dungeons: Vec<DungeonRun>,
+    #[serde(default)]
+    pub live_session_gathering_totals: GatheringTotals,
+    #[serde(default)]
+    pub live_session_gathering_log: Vec<GatheringEntry>,
+    #[serde(default)]
+    pub live_session_loot_log: Vec<LootLogEntry>,
+    #[serde(default)]
+    pub live_session_trades: Vec<TradeLogEntry>,
     pub network: NetworkDiagnostics,
 }
 
@@ -357,6 +424,7 @@ struct InternalEntity {
     is_party: bool,
     is_self: bool,
     equipment: CharacterEquipment,
+    weapon_specificity: u8,
     damage: i64,
     heal: i64,
     overhealed: i64,
@@ -386,9 +454,13 @@ pub struct AnalyzerEngine {
     pub telemetry_events_processed: u64,
 
     local_player: LocalPlayerProfile,
+    local_player_guid: Guid16,
+    awaiting_cluster_respawn: bool,
     entities: BTreeMap<i64, InternalEntity>,
     guid_to_object_id: HashMap<Guid16, i64>,
     party_guids: HashMap<Guid16, String>,
+    pending_equipment: HashMap<i64, (CharacterEquipment, Vec<i32>, u64)>,
+    last_known_equipment: HashMap<Guid16, (CharacterEquipment, u8)>,
     last_player_health: HashMap<i64, f64>,
     discovered_items: HashMap<i64, DiscoveredItem>,
     opened_chests: HashSet<i64>,
@@ -405,6 +477,14 @@ pub struct AnalyzerEngine {
     market_orders: Vec<MarketOrderEntry>,
     mail_notifications: Vec<MailNotificationEntry>,
     trades: Vec<TradeLogEntry>,
+
+    live_session_zones: Vec<SessionZoneSummary>,
+    live_session_combat: BTreeMap<String, InternalEntity>,
+    live_session_dungeons: Vec<DungeonRun>,
+    live_session_gathering_totals: GatheringTotals,
+    live_session_gathering_log: Vec<GatheringEntry>,
+    live_session_loot_log: Vec<LootLogEntry>,
+    live_session_trades: Vec<TradeLogEntry>,
     next_seq_id: u64,
 }
 
@@ -464,9 +544,13 @@ impl AnalyzerEngine {
                 is_respec_active: false,
                 in_combat: false,
             },
+            local_player_guid: Guid16::default(),
+            awaiting_cluster_respawn: false,
             entities: BTreeMap::new(),
             guid_to_object_id: HashMap::new(),
             party_guids: HashMap::new(),
+            pending_equipment: HashMap::new(),
+            last_known_equipment: HashMap::new(),
             last_player_health: HashMap::new(),
             discovered_items: HashMap::new(),
             opened_chests: HashSet::new(),
@@ -504,6 +588,13 @@ impl AnalyzerEngine {
             market_orders: Vec::new(),
             mail_notifications: Vec::new(),
             trades: Vec::new(),
+            live_session_zones: Vec::new(),
+            live_session_combat: BTreeMap::new(),
+            live_session_dungeons: Vec::new(),
+            live_session_gathering_totals: GatheringTotals::default(),
+            live_session_gathering_log: Vec::new(),
+            live_session_loot_log: Vec::new(),
+            live_session_trades: Vec::new(),
             next_seq_id: 1,
         }
     }
@@ -555,16 +646,39 @@ impl AnalyzerEngine {
                 reputation,
                 is_respec_active,
             } => {
-                let (map_name_fr, _, _, _, _) =
+                let (map_name_fr, map_name_en, map_kind, map_tier, _) =
                     self.resolve_cluster_metadata(&map_index, "", "", 0);
+
+                let prev_id = self
+                    .guid_to_object_id
+                    .get(&user_guid)
+                    .copied()
+                    .filter(|&id| id != 0 && user_guid != Guid16::default())
+                    .unwrap_or(self.local_player.object_id);
+                if prev_id != 0 && prev_id != user_object_id {
+                    self.migrate_entity_id(prev_id, user_object_id);
+                }
+                self.deduplicate_self_and_guid(user_object_id, user_guid);
+                self.awaiting_cluster_respawn = false;
+
+                if user_guid != Guid16::default() {
+                    self.local_player_guid = user_guid;
+                }
+                let final_username = if !Self::is_placeholder_player_name(&username) {
+                    username
+                } else if !Self::is_placeholder_player_name(&self.local_player.username) {
+                    self.local_player.username.clone()
+                } else {
+                    format!("Joueur #{user_object_id}")
+                };
 
                 self.local_player = LocalPlayerProfile {
                     object_id: user_object_id,
-                    username: username.clone(),
+                    username: final_username.clone(),
                     guild_name: guild_name.clone(),
                     alliance_name,
-                    current_map_index: map_index,
-                    current_map_name_fr: map_name_fr,
+                    current_map_index: map_index.clone(),
+                    current_map_name_fr: map_name_fr.clone(),
                     silver: silver.as_f64(),
                     gold: gold.as_f64(),
                     focus_points: current_focus_points,
@@ -575,20 +689,49 @@ impl AnalyzerEngine {
                     in_combat: false,
                 };
 
-                self.party_guids.insert(user_guid, username.clone());
-                self.guid_to_object_id.insert(user_guid, user_object_id);
-                let existing_equip = self
-                    .entities
-                    .get(&user_object_id)
-                    .map(|e| e.equipment.clone())
-                    .unwrap_or_default();
+                if user_guid != Guid16::default() {
+                    self.party_guids.insert(user_guid, final_username.clone());
+                    self.guid_to_object_id.insert(user_guid, user_object_id);
+                }
+
+                let cached_equip = if user_guid != Guid16::default() {
+                    self.last_known_equipment.get(&user_guid).cloned()
+                } else {
+                    None
+                };
+                let pending = self.take_valid_pending_equipment(user_object_id, now_ms);
+
                 let ent = self.ensure_entity(user_object_id);
-                ent.guid = user_guid;
-                ent.name = username;
-                ent.guild_name = guild_name;
+                if user_guid != Guid16::default() {
+                    ent.guid = user_guid;
+                }
+                ent.name = final_username;
+                if !guild_name.is_empty() {
+                    ent.guild_name = guild_name;
+                }
                 ent.is_party = true;
                 ent.is_self = true;
-                ent.equipment = existing_equip;
+                if ent.equipment == CharacterEquipment::default() {
+                    if let Some((equip, spec)) = cached_equip {
+                        ent.equipment = equip;
+                        ent.weapon_specificity = spec;
+                    }
+                }
+                if let Some((p_equip, p_spells)) = pending {
+                    self.apply_pending_to_entity(user_object_id, p_equip, p_spells);
+                }
+                self.sync_live_combat_entity(user_object_id);
+                if !map_index.trim().is_empty() {
+                    self.record_live_zone(
+                        &map_index,
+                        &map_name_fr,
+                        &map_name_en,
+                        &map_kind,
+                        map_tier,
+                        now_ms,
+                        true,
+                    );
+                }
             }
             AlbionTelemetryEvent::NewCharacter {
                 object_id,
@@ -597,39 +740,144 @@ impl AnalyzerEngine {
                 guild_name,
                 equipment,
             } => {
-                self.guid_to_object_id.insert(guid, object_id);
-                if self.local_player.object_id == object_id {
-                    if !name.is_empty() {
-                        self.local_player.username = name.clone();
+                let matches_self_guid = guid != Guid16::default() && guid == self.local_player_guid;
+                let matches_self_id =
+                    self.local_player.object_id != 0 && object_id == self.local_player.object_id;
+                let matches_self_respawn_name = self.awaiting_cluster_respawn
+                    && !Self::is_placeholder_player_name(&name)
+                    && !Self::is_placeholder_player_name(&self.local_player.username)
+                    && name.eq_ignore_ascii_case(&self.local_player.username);
+                let is_self = matches_self_guid || matches_self_id || matches_self_respawn_name;
+
+                if is_self {
+                    let old_self_id = self.local_player.object_id;
+                    if old_self_id != 0 && old_self_id != object_id {
+                        self.migrate_entity_id(old_self_id, object_id);
+                    }
+                    self.local_player.object_id = object_id;
+                    let self_guid = if guid != Guid16::default() {
+                        self.local_player_guid = guid;
+                        guid
+                    } else {
+                        self.local_player_guid
+                    };
+                    self.deduplicate_self_and_guid(object_id, self_guid);
+                    self.awaiting_cluster_respawn = false;
+                } else if guid != Guid16::default() && self.party_guids.contains_key(&guid) {
+                    if let Some(&old_id) = self.guid_to_object_id.get(&guid) {
+                        if old_id != 0 && old_id != object_id {
+                            self.migrate_entity_id(old_id, object_id);
+                        }
+                    }
+                }
+
+                if guid != Guid16::default() {
+                    self.guid_to_object_id.insert(guid, object_id);
+                }
+
+                let is_party =
+                    is_self || (guid != Guid16::default() && self.party_guids.contains_key(&guid));
+
+                let mut resolved_name = if !Self::is_placeholder_player_name(&name) {
+                    Some(name.clone())
+                } else {
+                    None
+                };
+                if resolved_name.is_none() && guid != Guid16::default() {
+                    if let Some(known) = self.party_guids.get(&guid) {
+                        if !Self::is_placeholder_player_name(known) {
+                            resolved_name = Some(known.clone());
+                        }
+                    }
+                }
+
+                if is_self {
+                    if let Some(ref real_name) = resolved_name {
+                        self.local_player.username = real_name.clone();
+                        if guid != Guid16::default() {
+                            self.party_guids.insert(guid, real_name.clone());
+                        }
+                    } else if guid != Guid16::default()
+                        && !Self::is_placeholder_player_name(&self.local_player.username)
+                    {
+                        self.party_guids
+                            .insert(guid, self.local_player.username.clone());
                     }
                     if !guild_name.is_empty() {
                         self.local_player.guild_name = guild_name.clone();
                     }
                 }
-                let is_party = self.party_guids.contains_key(&guid)
-                    || object_id == self.local_player.object_id;
-                let is_self = object_id == self.local_player.object_id;
-                let ent = self.ensure_entity(object_id);
-                ent.guid = guid;
-                if !name.is_empty() {
-                    ent.name = name;
+
+                let pending = self.take_valid_pending_equipment(object_id, now_ms);
+                let cached_equip = if (is_party || is_self) && guid != Guid16::default() {
+                    self.last_known_equipment.get(&guid).cloned()
+                } else {
+                    None
+                };
+
+                let self_username_fallback =
+                    if is_self && !Self::is_placeholder_player_name(&self.local_player.username) {
+                        Some(self.local_player.username.clone())
+                    } else {
+                        None
+                    };
+
+                {
+                    let ent = self.ensure_entity(object_id);
+                    if guid != Guid16::default() {
+                        ent.guid = guid;
+                    }
+                    if let Some(real_name) = resolved_name {
+                        ent.name = real_name;
+                    } else if let Some(fallback_name) = self_username_fallback {
+                        ent.name = fallback_name;
+                    }
+                    if !guild_name.is_empty() {
+                        ent.guild_name = guild_name;
+                    }
+                    ent.is_party = is_party;
+                    ent.is_self = is_self;
+                    if equipment != CharacterEquipment::default() {
+                        let prev_mh = ent.equipment.main_hand;
+                        let prev_spec = ent.weapon_specificity;
+                        ent.equipment = equipment;
+                        if ent.equipment.main_hand > 0 {
+                            ent.weapon_specificity = 4;
+                        } else if prev_mh > 0 && prev_spec > 0 && prev_spec < 4 {
+                            ent.equipment.main_hand = prev_mh;
+                            ent.weapon_specificity = prev_spec;
+                        } else {
+                            ent.weapon_specificity = 0;
+                        }
+                    } else if ent.equipment == CharacterEquipment::default() {
+                        if let Some((equip, spec)) = cached_equip {
+                            ent.equipment = equip;
+                            ent.weapon_specificity = spec;
+                        }
+                    }
                 }
-                if !guild_name.is_empty() {
-                    ent.guild_name = guild_name;
+                if let Some((p_equip, p_spells)) = pending {
+                    self.apply_pending_to_entity(object_id, p_equip, p_spells);
                 }
-                ent.is_party = is_party;
-                ent.is_self = is_self;
-                ent.equipment = equipment;
+                if is_party || is_self {
+                    self.remember_entity_equipment(object_id);
+                    self.sync_live_combat_entity(object_id);
+                }
             }
             AlbionTelemetryEvent::CharacterEquipmentChanged {
                 object_id,
                 equipment,
+                equipped_spells,
             } => {
-                if object_id == self.local_player.object_id {
-                    let ent = self.ensure_entity(object_id);
-                    ent.equipment = equipment;
-                } else if let Some(ent) = self.entities.get_mut(&object_id) {
-                    ent.equipment = equipment;
+                if object_id == self.local_player.object_id && object_id != 0 {
+                    let _ = self.ensure_entity(object_id);
+                }
+                if self.entities.contains_key(&object_id) {
+                    self.apply_equipment_update_to_entity(object_id, equipment, &equipped_spells);
+                } else if object_id != 0 {
+                    self.prune_stale_pending_equipment(now_ms);
+                    self.pending_equipment
+                        .insert(object_id, (equipment, equipped_spells, now_ms));
                 }
             }
             AlbionTelemetryEvent::PartyJoined {
@@ -641,10 +889,13 @@ impl AnalyzerEngine {
                     if let Some(&obj_id) = self.guid_to_object_id.get(&guid) {
                         if let Some(ent) = self.entities.get_mut(&obj_id) {
                             ent.is_party = true;
-                            if ent.name.is_empty() {
+                            if Self::is_placeholder_player_name(&ent.name)
+                                && !Self::is_placeholder_player_name(&username)
+                            {
                                 ent.name = username;
                             }
                         }
+                        self.sync_live_combat_entity(obj_id);
                     }
                 }
             }
@@ -657,10 +908,13 @@ impl AnalyzerEngine {
                 if let Some(&obj_id) = self.guid_to_object_id.get(&user_guid) {
                     if let Some(ent) = self.entities.get_mut(&obj_id) {
                         ent.is_party = true;
-                        if ent.name.is_empty() {
+                        if Self::is_placeholder_player_name(&ent.name)
+                            && !Self::is_placeholder_player_name(&username)
+                        {
                             ent.name = username;
                         }
                     }
+                    self.sync_live_combat_entity(obj_id);
                 }
             }
             AlbionTelemetryEvent::PartyPlayerLeft {
@@ -687,26 +941,25 @@ impl AnalyzerEngine {
                 spell_indices,
             } => {
                 // Weapon inference (`DetectUsedWeapon`) restricted strictly to party/self
-                let is_party_or_self = causer_id == self.local_player.object_id
-                    && self.local_player.object_id != 0
+                let is_party_or_self = (causer_id == self.local_player.object_id
+                    && self.local_player.object_id != 0)
                     || self
                         .entities
                         .get(&causer_id)
                         .map(|e| e.is_party || e.is_self)
                         .unwrap_or(false);
                 if is_party_or_self {
-                    let mut inferred = None;
-                    for &sp in &spell_indices {
-                        if let Some(weapon) = self.catalog.infer_weapon_from_spell(sp) {
-                            inferred = Some(weapon.index);
-                            break;
-                        }
-                    }
-                    if let Some(weapon_idx) = inferred {
+                    if let Some((weapon, spec)) =
+                        self.catalog.infer_best_weapon_from_spells(&spell_indices)
+                    {
+                        let weapon_idx = weapon.index;
                         let ent = self.ensure_entity(causer_id);
-                        if ent.equipment.main_hand == 0 {
+                        if ent.weapon_specificity < 4 && spec > ent.weapon_specificity {
                             ent.equipment.main_hand = weapon_idx;
+                            ent.weapon_specificity = spec;
                         }
+                        self.remember_entity_equipment(causer_id);
+                        self.sync_live_combat_entity(causer_id);
                     }
                 }
             }
@@ -753,6 +1006,16 @@ impl AnalyzerEngine {
                     if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
                         run.fame += gained;
                     }
+                    if let Some(run) = self
+                        .live_session_dungeons
+                        .first_mut()
+                        .filter(|d| d.is_active)
+                    {
+                        run.fame += gained;
+                    }
+                    if let Some(zone) = self.ensure_live_zone(now_ms) {
+                        zone.fame += gained;
+                    }
                 }
             }
             AlbionTelemetryEvent::TakeSilver {
@@ -776,6 +1039,16 @@ impl AnalyzerEngine {
                     if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
                         run.silver += net;
                     }
+                    if let Some(run) = self
+                        .live_session_dungeons
+                        .first_mut()
+                        .filter(|d| d.is_active)
+                    {
+                        run.silver += net;
+                    }
+                    if let Some(zone) = self.ensure_live_zone(now_ms) {
+                        zone.silver += net;
+                    }
                 }
             }
             AlbionTelemetryEvent::UpdateMoney {
@@ -784,6 +1057,12 @@ impl AnalyzerEngine {
             } => {
                 if self.local_player.object_id == 0 && object_id != 0 {
                     self.adopt_local_object_id(object_id);
+                } else if self.awaiting_cluster_respawn
+                    && object_id != 0
+                    && object_id != self.local_player.object_id
+                {
+                    // UpdateMoney is a private server->self wallet packet; safe signal for new cluster ID
+                    self.migrate_local_player_id(object_id);
                 }
                 if self.is_local_object(object_id) {
                     self.local_player.silver = current_player_silver.as_f64();
@@ -800,6 +1079,13 @@ impl AnalyzerEngine {
                 if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
                     run.respec += gained;
                 }
+                if let Some(run) = self
+                    .live_session_dungeons
+                    .first_mut()
+                    .filter(|d| d.is_active)
+                {
+                    run.respec += gained;
+                }
             }
             AlbionTelemetryEvent::MightAndFavorReceived { might, favor, .. } => {
                 let m = might.as_f64().max(0.0);
@@ -807,6 +1093,14 @@ impl AnalyzerEngine {
                 self.session.might += m;
                 self.session.favor += f;
                 if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
+                    run.might += m;
+                    run.favor += f;
+                }
+                if let Some(run) = self
+                    .live_session_dungeons
+                    .first_mut()
+                    .filter(|d| d.is_active)
+                {
                     run.might += m;
                     run.favor += f;
                 }
@@ -853,8 +1147,14 @@ impl AnalyzerEngine {
                 if !self.local_player.username.is_empty() {
                     if died_player.eq_ignore_ascii_case(&self.local_player.username) {
                         self.session.deaths += 1;
+                        if let Some(zone) = self.ensure_live_zone(now_ms) {
+                            zone.deaths += 1;
+                        }
                     } else if killed_by.eq_ignore_ascii_case(&self.local_player.username) {
                         self.session.kills += 1;
+                        if let Some(zone) = self.ensure_live_zone(now_ms) {
+                            zone.kills += 1;
+                        }
                     }
                 }
             }
@@ -877,11 +1177,25 @@ impl AnalyzerEngine {
                     if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
                         run.chests_opened += 1;
                     }
+                    if let Some(run) = self
+                        .live_session_dungeons
+                        .first_mut()
+                        .filter(|d| d.is_active)
+                    {
+                        run.chests_opened += 1;
+                    }
                 }
             }
             AlbionTelemetryEvent::MistsWispCageOpened { object_id } => {
                 if self.opened_caged_wisps.insert(object_id) {
                     if let Some(run) = self.dungeons.first_mut().filter(|d| d.is_active) {
+                        run.caged_wisps_opened += 1;
+                    }
+                    if let Some(run) = self
+                        .live_session_dungeons
+                        .first_mut()
+                        .filter(|d| d.is_active)
+                    {
                         run.caged_wisps_opened += 1;
                     }
                 }
@@ -959,24 +1273,27 @@ impl AnalyzerEngine {
                 item_count,
             } => {
                 let id = self.alloc_id();
-                self.trades.insert(
-                    0,
-                    TradeLogEntry {
-                        id,
-                        timestamp_ms: now_ms,
-                        player1_silver: player1_silver.as_f64(),
-                        player2_silver: player2_silver.as_f64(),
-                        sales_tax: sales_tax.as_f64(),
-                        item_count,
-                    },
-                );
+                let entry = TradeLogEntry {
+                    id,
+                    timestamp_ms: now_ms,
+                    player1_silver: player1_silver.as_f64(),
+                    player2_silver: player2_silver.as_f64(),
+                    sales_tax: sales_tax.as_f64(),
+                    item_count,
+                };
+                self.trades.insert(0, entry.clone());
                 if self.trades.len() > MAX_MARKET_ENTRIES {
                     self.trades.truncate(MAX_MARKET_ENTRIES);
+                }
+                self.live_session_trades.insert(0, entry);
+                if self.live_session_trades.len() > MAX_MARKET_ENTRIES {
+                    self.live_session_trades.truncate(MAX_MARKET_ENTRIES);
                 }
             }
             AlbionTelemetryEvent::Leave { object_id } => {
                 self.last_player_health.remove(&object_id);
                 self.discovered_items.remove(&object_id);
+                self.pending_equipment.remove(&object_id);
                 let non_party_guid = self
                     .entities
                     .get(&object_id)
@@ -993,26 +1310,371 @@ impl AnalyzerEngine {
         }
     }
 
-    fn adopt_local_object_id(&mut self, object_id: i64) {
-        if object_id == 0 {
+    fn is_placeholder_player_name(name: &str) -> bool {
+        let trimmed = name.trim();
+        trimmed.is_empty()
+            || trimmed == "PA"
+            || trimmed.starts_with("Joueur #")
+            || trimmed.starts_with("En attente")
+    }
+
+    fn session_combat_key(object_id: i64, guid: Guid16) -> String {
+        if guid != Guid16::default() {
+            guid.to_uuid_string()
+        } else {
+            format!("id:{object_id}")
+        }
+    }
+
+    fn merge_internal_entity(dst: &mut InternalEntity, src: InternalEntity) {
+        if dst.guid == Guid16::default() && src.guid != Guid16::default() {
+            dst.guid = src.guid;
+        }
+        if Self::is_placeholder_player_name(&dst.name)
+            && !Self::is_placeholder_player_name(&src.name)
+        {
+            dst.name = src.name;
+        }
+        if dst.guild_name.is_empty() && !src.guild_name.is_empty() {
+            dst.guild_name = src.guild_name;
+        }
+        dst.is_party |= src.is_party;
+        dst.is_self |= src.is_self;
+        if dst.equipment == CharacterEquipment::default()
+            && src.equipment != CharacterEquipment::default()
+        {
+            dst.equipment = src.equipment;
+            dst.weapon_specificity = src.weapon_specificity;
+        } else if src.equipment.main_hand > 0
+            && (dst.equipment.main_hand == 0 || src.weapon_specificity > dst.weapon_specificity)
+        {
+            dst.equipment.main_hand = src.equipment.main_hand;
+            dst.weapon_specificity = src.weapon_specificity;
+        }
+        dst.damage += src.damage;
+        dst.heal += src.heal;
+        dst.overhealed += src.overhealed;
+        dst.taken_damage += src.taken_damage;
+        dst.first_combat_ms = match (dst.first_combat_ms, src.first_combat_ms) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        dst.last_combat_ms = match (dst.last_combat_ms, src.last_combat_ms) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        for (sp_idx, acc) in src.spells {
+            let entry = dst.spells.entry(sp_idx).or_default();
+            entry.ticks += acc.ticks;
+            entry.damage += acc.damage;
+            entry.heal += acc.heal;
+            entry.overhealed += acc.overhealed;
+        }
+    }
+
+    fn migrate_entity_id(&mut self, old_id: i64, new_id: i64) {
+        if old_id == 0 || new_id == 0 || old_id == new_id {
             return;
         }
-        self.local_player.object_id = object_id;
-        let (name_to_adopt, guild_to_adopt) = {
-            let ent = self.ensure_entity(object_id);
+        if let Some(mut old_ent) = self.entities.remove(&old_id) {
+            old_ent.object_id = new_id;
+            if let Some(new_ent) = self.entities.get_mut(&new_id) {
+                Self::merge_internal_entity(new_ent, old_ent);
+            } else {
+                self.entities.insert(new_id, old_ent);
+            }
+        }
+        if let Some(hp) = self.last_player_health.remove(&old_id) {
+            self.last_player_health.entry(new_id).or_insert(hp);
+        }
+        for mapped in self.guid_to_object_id.values_mut() {
+            if *mapped == old_id {
+                *mapped = new_id;
+            }
+        }
+        let old_sc_key = format!("id:{old_id}");
+        if let Some(mut old_sc) = self.live_session_combat.remove(&old_sc_key) {
+            let target_guid = self
+                .entities
+                .get(&new_id)
+                .map(|e| e.guid)
+                .unwrap_or(old_sc.guid);
+            old_sc.object_id = new_id;
+            let target_key = Self::session_combat_key(new_id, target_guid);
+            if let Some(dst) = self.live_session_combat.get_mut(&target_key) {
+                Self::merge_internal_entity(dst, old_sc);
+            } else {
+                self.live_session_combat.insert(target_key, old_sc);
+            }
+        }
+    }
+
+    fn deduplicate_self_and_guid(&mut self, keep_object_id: i64, self_guid: Guid16) {
+        let dup_ids: Vec<i64> = self
+            .entities
+            .iter()
+            .filter_map(|(&id, ent)| {
+                let same_guid = self_guid != Guid16::default() && ent.guid == self_guid;
+                (id != keep_object_id && (ent.is_self || same_guid)).then_some(id)
+            })
+            .collect();
+        for old_id in dup_ids {
+            self.migrate_entity_id(old_id, keep_object_id);
+        }
+        for ent in self.entities.values_mut() {
+            ent.is_self = ent.object_id == keep_object_id && keep_object_id != 0;
+            if ent.is_self {
+                ent.is_party = true;
+            }
+        }
+    }
+
+    fn migrate_local_player_id(&mut self, new_object_id: i64) {
+        if new_object_id == 0 {
+            return;
+        }
+        let old_id = self.local_player.object_id;
+        if old_id != 0 && old_id != new_object_id {
+            self.migrate_entity_id(old_id, new_object_id);
+        }
+        self.local_player.object_id = new_object_id;
+        let self_guid = self.local_player_guid;
+        self.deduplicate_self_and_guid(new_object_id, self_guid);
+        self.awaiting_cluster_respawn = false;
+
+        let username_fallback = if !Self::is_placeholder_player_name(&self.local_player.username) {
+            Some(self.local_player.username.clone())
+        } else {
+            None
+        };
+
+        let (guid_found, name_to_adopt, guild_to_adopt) = {
+            let ent = self.ensure_entity(new_object_id);
             ent.is_self = true;
             ent.is_party = true;
-            if !ent.name.is_empty() && !ent.name.starts_with("Joueur #") {
-                (Some(ent.name.clone()), Some(ent.guild_name.clone()))
+            if ent.guid == Guid16::default() && self_guid != Guid16::default() {
+                ent.guid = self_guid;
+            }
+            if !Self::is_placeholder_player_name(&ent.name) {
+                (
+                    ent.guid,
+                    Some(ent.name.clone()),
+                    Some(ent.guild_name.clone()),
+                )
             } else {
-                (None, None)
+                if let Some(fallback_name) = username_fallback {
+                    ent.name = fallback_name;
+                }
+                (ent.guid, None, None)
             }
         };
+
+        if self.local_player_guid == Guid16::default() && guid_found != Guid16::default() {
+            self.local_player_guid = guid_found;
+        }
         if let (Some(name), Some(guild)) = (name_to_adopt, guild_to_adopt) {
-            self.local_player.username = name;
-            self.local_player.guild_name = guild;
+            self.local_player.username = name.clone();
+            if !guild.is_empty() {
+                self.local_player.guild_name = guild;
+            }
+            if self.local_player_guid != Guid16::default() {
+                self.party_guids.insert(self.local_player_guid, name);
+            }
         } else if self.local_player.username.starts_with("En attente") {
-            self.local_player.username = format!("Joueur #{object_id}");
+            self.local_player.username = format!("Joueur #{new_object_id}");
+        }
+        if self.local_player_guid != Guid16::default() {
+            self.guid_to_object_id
+                .insert(self.local_player_guid, new_object_id);
+        }
+        if let Some((p_equip, p_spells)) =
+            self.take_valid_pending_equipment(new_object_id, self.last_now_ms)
+        {
+            self.apply_pending_to_entity(new_object_id, p_equip, p_spells);
+        } else if self.local_player_guid != Guid16::default() {
+            let cached = self
+                .last_known_equipment
+                .get(&self.local_player_guid)
+                .cloned();
+            if let (Some((equip, spec)), Some(ent)) =
+                (cached, self.entities.get_mut(&new_object_id))
+            {
+                if ent.equipment == CharacterEquipment::default() {
+                    ent.equipment = equip;
+                    ent.weapon_specificity = spec;
+                }
+            }
+        }
+        self.remember_entity_equipment(new_object_id);
+        self.sync_live_combat_entity(new_object_id);
+    }
+
+    fn adopt_local_object_id(&mut self, object_id: i64) {
+        self.migrate_local_player_id(object_id);
+    }
+
+    fn prune_stale_pending_equipment(&mut self, now_ms: u64) {
+        self.pending_equipment
+            .retain(|_, (_, _, ts)| now_ms.saturating_sub(*ts) <= 30_000);
+    }
+
+    fn take_valid_pending_equipment(
+        &mut self,
+        object_id: i64,
+        now_ms: u64,
+    ) -> Option<(CharacterEquipment, Vec<i32>)> {
+        let (equip, spells, ts) = self.pending_equipment.remove(&object_id)?;
+        if now_ms.saturating_sub(ts) <= 30_000 {
+            Some((equip, spells))
+        } else {
+            None
+        }
+    }
+
+    fn apply_pending_to_entity(
+        &mut self,
+        object_id: i64,
+        equipment: CharacterEquipment,
+        equipped_spells: Vec<i32>,
+    ) {
+        let best_from_spells = self
+            .catalog
+            .infer_best_weapon_from_spells(&equipped_spells)
+            .map(|(w, s)| (w.index, s));
+        if let Some(ent) = self.entities.get_mut(&object_id) {
+            if equipment != CharacterEquipment::default() {
+                if equipment.main_hand > 0 {
+                    ent.equipment = equipment;
+                    ent.weapon_specificity = 4;
+                } else {
+                    let prev_mh = ent.equipment.main_hand;
+                    let prev_spec = ent.weapon_specificity;
+                    ent.equipment = equipment;
+                    if let Some((w_idx, spec)) = best_from_spells {
+                        ent.equipment.main_hand = w_idx;
+                        ent.weapon_specificity = spec;
+                    } else if prev_mh > 0 && prev_spec > 0 && prev_spec < 4 {
+                        ent.equipment.main_hand = prev_mh;
+                        ent.weapon_specificity = prev_spec;
+                    }
+                }
+            } else if ent.weapon_specificity < 4 {
+                if let Some((w_idx, spec)) = best_from_spells {
+                    if spec > ent.weapon_specificity {
+                        ent.equipment.main_hand = w_idx;
+                        ent.weapon_specificity = spec;
+                    }
+                }
+            }
+        }
+    }
+
+    fn apply_equipment_update_to_entity(
+        &mut self,
+        object_id: i64,
+        equipment: CharacterEquipment,
+        equipped_spells: &[i32],
+    ) {
+        let best_from_spells = self
+            .catalog
+            .infer_best_weapon_from_spells(equipped_spells)
+            .map(|(w, s)| (w.index, s));
+        let mut is_tracked = false;
+        if let Some(ent) = self.entities.get_mut(&object_id) {
+            let prev_mh = ent.equipment.main_hand;
+            let prev_spec = ent.weapon_specificity;
+            if equipment != CharacterEquipment::default() {
+                ent.equipment = equipment;
+                if ent.equipment.main_hand > 0 {
+                    ent.weapon_specificity = 4;
+                } else if let Some((w_idx, spec)) = best_from_spells {
+                    ent.equipment.main_hand = w_idx;
+                    ent.weapon_specificity = spec;
+                } else if prev_mh > 0
+                    && prev_spec > 0
+                    && prev_spec < 4
+                    && equipped_spells.is_empty()
+                {
+                    ent.equipment.main_hand = prev_mh;
+                    ent.weapon_specificity = prev_spec;
+                } else {
+                    ent.weapon_specificity = 0;
+                }
+            } else if ent.weapon_specificity < 4 {
+                if let Some((w_idx, spec)) = best_from_spells {
+                    if spec > ent.weapon_specificity {
+                        ent.equipment.main_hand = w_idx;
+                        ent.weapon_specificity = spec;
+                    }
+                }
+            }
+            is_tracked = ent.is_party || ent.is_self;
+        }
+        if is_tracked {
+            self.remember_entity_equipment(object_id);
+            self.sync_live_combat_entity(object_id);
+        }
+    }
+
+    fn remember_entity_equipment(&mut self, object_id: i64) {
+        if let Some(ent) = self.entities.get(&object_id) {
+            if (ent.is_party || ent.is_self)
+                && ent.guid != Guid16::default()
+                && ent.equipment != CharacterEquipment::default()
+            {
+                self.last_known_equipment
+                    .insert(ent.guid, (ent.equipment.clone(), ent.weapon_specificity));
+            }
+        }
+    }
+
+    fn sync_live_combat_entity(&mut self, object_id: i64) {
+        let Some(src) = self.entities.get(&object_id) else {
+            return;
+        };
+        if !src.is_party && !src.is_self {
+            return;
+        }
+        let guid = src.guid;
+        let name = src.name.clone();
+        let guild_name = src.guild_name.clone();
+        let is_party = src.is_party;
+        let is_self = src.is_self;
+        let main_hand = src.equipment.main_hand;
+        let weapon_specificity = src.weapon_specificity;
+
+        let target_key = Self::session_combat_key(object_id, guid);
+        if guid != Guid16::default() {
+            let legacy_key = format!("id:{object_id}");
+            if let Some(mut legacy_ent) = self.live_session_combat.remove(&legacy_key) {
+                legacy_ent.guid = guid;
+                if let Some(existing) = self.live_session_combat.get_mut(&target_key) {
+                    Self::merge_internal_entity(existing, legacy_ent);
+                } else {
+                    self.live_session_combat
+                        .insert(target_key.clone(), legacy_ent);
+                }
+            }
+        }
+        if let Some(dst) = self.live_session_combat.get_mut(&target_key) {
+            dst.object_id = object_id;
+            if guid != Guid16::default() {
+                dst.guid = guid;
+            }
+            if !Self::is_placeholder_player_name(&name) {
+                dst.name = name;
+            }
+            if !guild_name.is_empty() {
+                dst.guild_name = guild_name;
+            }
+            dst.is_party |= is_party;
+            dst.is_self |= is_self;
+            if main_hand > 0
+                && (dst.equipment.main_hand == 0 || weapon_specificity >= dst.weapon_specificity)
+            {
+                dst.equipment.main_hand = main_hand;
+                dst.weapon_specificity = weapon_specificity;
+            }
         }
     }
 
@@ -1065,6 +1727,7 @@ impl AnalyzerEngine {
                 is_party: is_self,
                 is_self,
                 equipment: CharacterEquipment::default(),
+                weapon_specificity: 0,
                 damage: 0,
                 heal: 0,
                 overhealed: 0,
@@ -1132,38 +1795,152 @@ impl AnalyzerEngine {
         if causer_in_party && tick.causer_id != 0 {
             let weapon_inferred = self
                 .catalog
-                .infer_weapon_from_spell(spell_idx)
-                .map(|w| w.index);
-            let causer = self.ensure_entity(tick.causer_id);
-            if causer.equipment.main_hand == 0 {
-                if let Some(w_id) = weapon_inferred {
-                    causer.equipment.main_hand = w_id;
+                .infer_weapon_from_spell_with_specificity(spell_idx)
+                .map(|(w, spec)| (w.index, spec));
+            let causer_snapshot = {
+                let causer = self.ensure_entity(tick.causer_id);
+                if causer.weapon_specificity < 4 {
+                    if let Some((w_id, spec)) = weapon_inferred {
+                        if spec > causer.weapon_specificity {
+                            causer.equipment.main_hand = w_id;
+                            causer.weapon_specificity = spec;
+                        }
+                    }
                 }
-            }
-            causer.first_combat_ms = Some(causer.first_combat_ms.map_or(now_ms, |s| s.min(now_ms)));
-            causer.last_combat_ms = Some(causer.last_combat_ms.map_or(now_ms, |e| e.max(now_ms)));
+                causer.first_combat_ms =
+                    Some(causer.first_combat_ms.map_or(now_ms, |s| s.min(now_ms)));
+                causer.last_combat_ms =
+                    Some(causer.last_combat_ms.map_or(now_ms, |e| e.max(now_ms)));
 
-            let spell = causer.spells.entry(spell_idx).or_default();
-            spell.ticks += 1;
+                let spell = causer.spells.entry(spell_idx).or_default();
+                spell.ticks += 1;
+                if is_damage {
+                    causer.damage += amount;
+                    spell.damage += amount;
+                } else if is_max_health_reached {
+                    causer.overhealed += amount;
+                    spell.overhealed += amount;
+                } else {
+                    causer.heal += amount;
+                    spell.heal += amount;
+                }
+                (
+                    causer.guid,
+                    causer.name.clone(),
+                    causer.guild_name.clone(),
+                    causer.is_party,
+                    causer.is_self,
+                    causer.equipment.clone(),
+                    causer.weapon_specificity,
+                )
+            };
+
+            let (c_guid, c_name, c_guild, c_party, c_self, c_equip, c_spec) = causer_snapshot;
+            let sc_key = Self::session_combat_key(tick.causer_id, c_guid);
+            let sc_ent = self
+                .live_session_combat
+                .entry(sc_key)
+                .or_insert_with(|| InternalEntity {
+                    object_id: tick.causer_id,
+                    guid: c_guid,
+                    name: c_name.clone(),
+                    guild_name: c_guild.clone(),
+                    is_party: c_party,
+                    is_self: c_self,
+                    equipment: c_equip.clone(),
+                    weapon_specificity: c_spec,
+                    damage: 0,
+                    heal: 0,
+                    overhealed: 0,
+                    taken_damage: 0,
+                    first_combat_ms: None,
+                    last_combat_ms: None,
+                    spells: BTreeMap::new(),
+                });
+            sc_ent.object_id = tick.causer_id;
+            if !Self::is_placeholder_player_name(&c_name) {
+                sc_ent.name = c_name;
+            }
+            if !c_guild.is_empty() {
+                sc_ent.guild_name = c_guild;
+            }
+            sc_ent.is_party |= c_party;
+            sc_ent.is_self |= c_self;
+            if c_equip.main_hand > 0
+                && (sc_ent.equipment.main_hand == 0 || c_spec >= sc_ent.weapon_specificity)
+            {
+                sc_ent.equipment.main_hand = c_equip.main_hand;
+                sc_ent.weapon_specificity = c_spec;
+            }
+            sc_ent.first_combat_ms = Some(sc_ent.first_combat_ms.map_or(now_ms, |s| s.min(now_ms)));
+            sc_ent.last_combat_ms = Some(sc_ent.last_combat_ms.map_or(now_ms, |e| e.max(now_ms)));
+            let sc_spell = sc_ent.spells.entry(spell_idx).or_default();
+            sc_spell.ticks += 1;
             if is_damage {
-                causer.damage += amount;
-                spell.damage += amount;
+                sc_ent.damage += amount;
+                sc_spell.damage += amount;
             } else if is_max_health_reached {
-                causer.overhealed += amount;
-                spell.overhealed += amount;
+                sc_ent.overhealed += amount;
+                sc_spell.overhealed += amount;
             } else {
-                causer.heal += amount;
-                spell.heal += amount;
+                sc_ent.heal += amount;
+                sc_spell.heal += amount;
             }
         }
 
         if is_damage && affected_in_party && tick.affected_object_id != 0 {
-            let affected = self.ensure_entity(tick.affected_object_id);
-            affected.taken_damage += amount;
-            affected.first_combat_ms =
-                Some(affected.first_combat_ms.map_or(now_ms, |s| s.min(now_ms)));
-            affected.last_combat_ms =
-                Some(affected.last_combat_ms.map_or(now_ms, |e| e.max(now_ms)));
+            let affected_snapshot = {
+                let affected = self.ensure_entity(tick.affected_object_id);
+                affected.taken_damage += amount;
+                affected.first_combat_ms =
+                    Some(affected.first_combat_ms.map_or(now_ms, |s| s.min(now_ms)));
+                affected.last_combat_ms =
+                    Some(affected.last_combat_ms.map_or(now_ms, |e| e.max(now_ms)));
+                (
+                    affected.guid,
+                    affected.name.clone(),
+                    affected.guild_name.clone(),
+                    affected.is_party,
+                    affected.is_self,
+                    affected.equipment.clone(),
+                    affected.weapon_specificity,
+                )
+            };
+
+            let (a_guid, a_name, a_guild, a_party, a_self, a_equip, a_spec) = affected_snapshot;
+            let sc_key = Self::session_combat_key(tick.affected_object_id, a_guid);
+            let sc_ent = self
+                .live_session_combat
+                .entry(sc_key)
+                .or_insert_with(|| InternalEntity {
+                    object_id: tick.affected_object_id,
+                    guid: a_guid,
+                    name: a_name.clone(),
+                    guild_name: a_guild.clone(),
+                    is_party: a_party,
+                    is_self: a_self,
+                    equipment: a_equip,
+                    weapon_specificity: a_spec,
+                    damage: 0,
+                    heal: 0,
+                    overhealed: 0,
+                    taken_damage: 0,
+                    first_combat_ms: None,
+                    last_combat_ms: None,
+                    spells: BTreeMap::new(),
+                });
+            sc_ent.object_id = tick.affected_object_id;
+            if !Self::is_placeholder_player_name(&a_name) {
+                sc_ent.name = a_name;
+            }
+            if !a_guild.is_empty() {
+                sc_ent.guild_name = a_guild;
+            }
+            sc_ent.is_party |= a_party;
+            sc_ent.is_self |= a_self;
+            sc_ent.taken_damage += amount;
+            sc_ent.first_combat_ms = Some(sc_ent.first_combat_ms.map_or(now_ms, |s| s.min(now_ms)));
+            sc_ent.last_combat_ms = Some(sc_ent.last_combat_ms.map_or(now_ms, |e| e.max(now_ms)));
         }
     }
 
@@ -1361,6 +2138,99 @@ impl AnalyzerEngine {
         (fallback_fr, fallback_en, kind, tier, is_instanced)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn record_live_zone(
+        &mut self,
+        index: &str,
+        name_fr: &str,
+        name_en: &str,
+        kind: &str,
+        tier: u8,
+        now_ms: u64,
+        from_join: bool,
+    ) {
+        let trimmed = index.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if let Some(cur) = self.live_session_zones.first_mut() {
+            if cur.cluster_index == trimmed {
+                if !from_join {
+                    if cur.name_fr.starts_with("Zone ") || !name_fr.starts_with("Zone ") {
+                        cur.name_fr = name_fr.to_string();
+                        cur.name_en = name_en.to_string();
+                    }
+                    cur.kind = kind.to_string();
+                    cur.tier = tier;
+                }
+                return;
+            }
+            cur.duration_seconds =
+                ((now_ms.saturating_sub(cur.entered_at_ms)) as f64 / 1000.0).max(1.0);
+        }
+        self.live_session_zones.insert(
+            0,
+            SessionZoneSummary {
+                cluster_index: trimmed.to_string(),
+                name_fr: name_fr.to_string(),
+                name_en: name_en.to_string(),
+                kind: kind.to_string(),
+                tier,
+                entered_at_ms: now_ms,
+                duration_seconds: 0.0,
+                fame: 0.0,
+                silver: 0.0,
+                gathering_nodes: 0,
+                gathering_resources: 0,
+                kills: 0,
+                deaths: 0,
+            },
+        );
+        if self.live_session_zones.len() > MAX_SESSION_ZONES {
+            self.live_session_zones.truncate(MAX_SESSION_ZONES);
+        }
+    }
+
+    fn ensure_live_zone(&mut self, _now_ms: u64) -> Option<&mut SessionZoneSummary> {
+        if self.live_session_zones.is_empty() {
+            let idx = if !self.local_player.current_map_index.trim().is_empty() {
+                self.local_player.current_map_index.clone()
+            } else {
+                "UNKNOWN".to_string()
+            };
+            let (resolved_fr, resolved_en, resolved_kind, resolved_tier, _) = if idx != "UNKNOWN" {
+                self.resolve_cluster_metadata(&idx, "", "", 0)
+            } else {
+                let label = if self
+                    .local_player
+                    .current_map_name_fr
+                    .starts_with("En attente")
+                {
+                    "Zone en cours".to_string()
+                } else {
+                    self.local_player.current_map_name_fr.clone()
+                };
+                (label.clone(), label, "openWorld".to_string(), 4, false)
+            };
+            self.live_session_zones.push(SessionZoneSummary {
+                cluster_index: idx,
+                name_fr: resolved_fr,
+                name_en: resolved_en,
+                kind: resolved_kind,
+                tier: resolved_tier,
+                entered_at_ms: self.session_start_ms,
+                duration_seconds: 0.0,
+                fame: 0.0,
+                silver: 0.0,
+                gathering_nodes: 0,
+                gathering_resources: 0,
+                kills: 0,
+                deaths: 0,
+            });
+        }
+        self.live_session_zones.first_mut()
+    }
+
     fn handle_cluster_change(
         &mut self,
         index: &str,
@@ -1379,17 +2249,29 @@ impl AnalyzerEngine {
         self.opened_chests.clear();
         self.opened_caged_wisps.clear();
         self.last_player_health.clear();
+        self.pending_equipment.clear();
         self.entities.retain(|_, e| e.is_party || e.is_self);
         self.guid_to_object_id
             .retain(|_, obj_id| self.entities.contains_key(obj_id));
+        self.awaiting_cluster_respawn = true;
 
-        // Finalize any currently active dungeon run
+        // Finalize any currently active dungeon run (global + live session)
         if let Some(prev) = self.dungeons.first_mut().filter(|d| d.is_active) {
             prev.is_active = false;
             let elapsed_s = ((now_ms.saturating_sub(prev.started_at_ms)) as f64 / 1000.0).max(1.0);
             prev.duration_seconds = elapsed_s;
             prev.fame_per_hour = prev.fame / (elapsed_s / 3600.0);
             self.dirty_history = true;
+        }
+        if let Some(prev) = self
+            .live_session_dungeons
+            .first_mut()
+            .filter(|d| d.is_active)
+        {
+            prev.is_active = false;
+            let elapsed_s = ((now_ms.saturating_sub(prev.started_at_ms)) as f64 / 1000.0).max(1.0);
+            prev.duration_seconds = elapsed_s;
+            prev.fame_per_hour = prev.fame / (elapsed_s / 3600.0);
         }
 
         let (name_fr, name_en, kind, tier, is_instanced) = self.resolve_cluster_metadata(
@@ -1401,33 +2283,36 @@ impl AnalyzerEngine {
 
         self.local_player.current_map_index = index.to_string();
         self.local_player.current_map_name_fr = name_fr.clone();
+        self.record_live_zone(index, &name_fr, &name_en, &kind, tier, now_ms, false);
 
         if is_instanced {
             let id = self.alloc_id();
-            self.dungeons.insert(
-                0,
-                DungeonRun {
-                    id,
-                    cluster_index: index.to_string(),
-                    name_fr,
-                    name_en,
-                    kind,
-                    tier,
-                    is_active: true,
-                    started_at_ms: now_ms,
-                    duration_seconds: 0.0,
-                    fame: 0.0,
-                    fame_per_hour: 0.0,
-                    silver: 0.0,
-                    respec: 0.0,
-                    might: 0.0,
-                    favor: 0.0,
-                    chests_opened: 0,
-                    caged_wisps_opened: 0,
-                },
-            );
+            let run = DungeonRun {
+                id,
+                cluster_index: index.to_string(),
+                name_fr,
+                name_en,
+                kind,
+                tier,
+                is_active: true,
+                started_at_ms: now_ms,
+                duration_seconds: 0.0,
+                fame: 0.0,
+                fame_per_hour: 0.0,
+                silver: 0.0,
+                respec: 0.0,
+                might: 0.0,
+                favor: 0.0,
+                chests_opened: 0,
+                caged_wisps_opened: 0,
+            };
+            self.dungeons.insert(0, run.clone());
             if self.dungeons.len() > MAX_DUNGEON_RUNS {
                 self.dungeons.truncate(MAX_DUNGEON_RUNS);
+            }
+            self.live_session_dungeons.insert(0, run);
+            if self.live_session_dungeons.len() > MAX_DUNGEON_RUNS {
+                self.live_session_dungeons.truncate(MAX_DUNGEON_RUNS);
             }
             self.dirty_history = true;
         }
@@ -1463,54 +2348,50 @@ impl AnalyzerEngine {
         let unit_val = item.as_ref().map(|i| i.item_value).unwrap_or(120) * 14;
         let estimated_silver = (total as i64) * unit_val;
 
-        let resource_kind = if unique_name.contains("WOOD") {
-            self.gathering_totals.wood += total as i64;
-            "wood"
-        } else if unique_name.contains("ORE") {
-            self.gathering_totals.ore += total as i64;
-            "ore"
-        } else if unique_name.contains("FIBER") {
-            self.gathering_totals.fiber += total as i64;
-            "fiber"
-        } else if unique_name.contains("HIDE") {
-            self.gathering_totals.hide += total as i64;
-            "hide"
-        } else if unique_name.contains("ROCK") {
-            self.gathering_totals.rock += total as i64;
-            "rock"
-        } else if unique_name.contains("FISH") {
-            self.gathering_totals.fish += total as i64;
-            "fish"
-        } else {
-            "other"
-        };
+        let resource_kind = Self::classify_resource_kind(&unique_name);
+        Self::add_gathering_kind_amount(&mut self.gathering_totals, resource_kind, total as i64);
+        Self::add_gathering_kind_amount(
+            &mut self.live_session_gathering_totals,
+            resource_kind,
+            total as i64,
+        );
 
         self.gathering_totals.total_nodes += 1;
         self.gathering_totals.total_resources += total as i64;
         self.gathering_totals.total_estimated_silver += estimated_silver;
+        self.live_session_gathering_totals.total_nodes += 1;
+        self.live_session_gathering_totals.total_resources += total as i64;
+        self.live_session_gathering_totals.total_estimated_silver += estimated_silver;
+
+        if let Some(zone) = self.ensure_live_zone(now_ms) {
+            zone.gathering_nodes += 1;
+            zone.gathering_resources += total as i64;
+        }
 
         let id = self.alloc_id();
-        self.gathering_log.insert(
-            0,
-            GatheringEntry {
-                id,
-                timestamp_ms: now_ms,
-                item_index: item_id,
-                unique_name,
-                name_fr,
-                name_en,
-                resource_kind: resource_kind.into(),
-                tier,
-                enchantment,
-                standard_amount,
-                collector_bonus,
-                premium_bonus,
-                total_amount: total,
-                estimated_silver,
-            },
-        );
+        let entry = GatheringEntry {
+            id,
+            timestamp_ms: now_ms,
+            item_index: item_id,
+            unique_name,
+            name_fr,
+            name_en,
+            resource_kind: resource_kind.into(),
+            tier,
+            enchantment,
+            standard_amount,
+            collector_bonus,
+            premium_bonus,
+            total_amount: total,
+            estimated_silver,
+        };
+        self.gathering_log.insert(0, entry.clone());
         if self.gathering_log.len() > MAX_GATHERING_LOG {
             self.gathering_log.truncate(MAX_GATHERING_LOG);
+        }
+        self.live_session_gathering_log.insert(0, entry);
+        if self.live_session_gathering_log.len() > MAX_GATHERING_LOG {
+            self.live_session_gathering_log.truncate(MAX_GATHERING_LOG);
         }
         self.dirty_history = true;
     }
@@ -1527,19 +2408,22 @@ impl AnalyzerEngine {
         now_ms: u64,
     ) {
         let mut estimated_silver = 0i64;
-        if let Some(disc) = self.discovered_items.get(&object_id) {
-            if item_index <= 0 {
-                item_index = disc.item_id;
+        if !is_silver {
+            if let Some(disc) = self.discovered_items.get(&object_id) {
+                if item_index <= 0 {
+                    item_index = disc.item_id;
+                }
+                if quantity <= 0 {
+                    quantity = disc.quantity;
+                }
+                estimated_silver = disc.estimated_market_value;
             }
-            if quantity <= 0 {
-                quantity = disc.quantity;
-            }
-            estimated_silver = disc.estimated_market_value;
         }
 
         // 2-second deduplication window for repeated pickup notifications
         let is_dup = self.loot_log.iter().take(16).any(|prev| {
             now_ms.saturating_sub(prev.timestamp_ms) <= LOOT_DEDUP_WINDOW_MS
+                && prev.is_silver == is_silver
                 && prev.item_index == item_index
                 && prev.quantity == quantity
                 && prev.looted_by == looted_by_name
@@ -1570,31 +2454,33 @@ impl AnalyzerEngine {
         };
         if estimated_silver <= 0 {
             estimated_silver = if is_silver {
-                quantity as i64
+                quantity.max(1) as i64
             } else {
                 item.map(|i| i.item_value * 16).unwrap_or(1_000) * (quantity.max(1) as i64)
             };
         }
 
         let id = self.alloc_id();
-        self.loot_log.insert(
-            0,
-            LootLogEntry {
-                id,
-                timestamp_ms: now_ms,
-                looted_by: looted_by_name,
-                looted_from: looted_from_name,
-                item_index,
-                unique_name,
-                name_fr,
-                name_en,
-                quantity: quantity.max(1),
-                is_silver,
-                estimated_silver,
-            },
-        );
+        let entry = LootLogEntry {
+            id,
+            timestamp_ms: now_ms,
+            looted_by: looted_by_name,
+            looted_from: looted_from_name,
+            item_index,
+            unique_name,
+            name_fr,
+            name_en,
+            quantity: quantity.max(1),
+            is_silver,
+            estimated_silver,
+        };
+        self.loot_log.insert(0, entry.clone());
         if self.loot_log.len() > MAX_LOOT_LOG {
             self.loot_log.truncate(MAX_LOOT_LOG);
+        }
+        self.live_session_loot_log.insert(0, entry);
+        if self.live_session_loot_log.len() > MAX_LOOT_LOG {
+            self.live_session_loot_log.truncate(MAX_LOOT_LOG);
         }
         self.dirty_history = true;
     }
@@ -1683,6 +2569,159 @@ impl AnalyzerEngine {
         }
     }
 
+    fn classify_resource_kind(unique_name: &str) -> &'static str {
+        if unique_name.contains("WOOD") {
+            "wood"
+        } else if unique_name.contains("ORE") {
+            "ore"
+        } else if unique_name.contains("FIBER") {
+            "fiber"
+        } else if unique_name.contains("HIDE") {
+            "hide"
+        } else if unique_name.contains("ROCK") {
+            "rock"
+        } else if unique_name.contains("FISH") {
+            "fish"
+        } else {
+            "other"
+        }
+    }
+
+    fn add_gathering_kind_amount(totals: &mut GatheringTotals, kind: &str, delta: i64) {
+        match kind {
+            "wood" => totals.wood = (totals.wood + delta).max(0),
+            "ore" => totals.ore = (totals.ore + delta).max(0),
+            "fiber" => totals.fiber = (totals.fiber + delta).max(0),
+            "hide" => totals.hide = (totals.hide + delta).max(0),
+            "rock" => totals.rock = (totals.rock + delta).max(0),
+            "fish" => totals.fish = (totals.fish + delta).max(0),
+            _ => {}
+        }
+    }
+
+    fn refresh_gathering_list(
+        catalog: &Catalog,
+        entries: &mut [GatheringEntry],
+        totals: &mut GatheringTotals,
+    ) {
+        for g in entries.iter_mut() {
+            if let Some(item) = catalog.item(g.item_index) {
+                let prev_kind = g.resource_kind.clone();
+                let new_kind = Self::classify_resource_kind(&item.unique_name);
+                let amt = g.total_amount.max(0) as i64;
+                if prev_kind != new_kind && amt > 0 {
+                    Self::add_gathering_kind_amount(totals, &prev_kind, -amt);
+                    Self::add_gathering_kind_amount(totals, new_kind, amt);
+                }
+                if g.unique_name.starts_with("ITEM_") && item.item_value > 0 && amt > 0 {
+                    let new_est = amt * (item.item_value * 14);
+                    totals.total_estimated_silver =
+                        (totals.total_estimated_silver + new_est - g.estimated_silver).max(0);
+                    g.estimated_silver = new_est;
+                }
+                g.unique_name = item.unique_name.clone();
+                g.name_fr = item.name_fr.clone();
+                g.name_en = item.name_en.clone();
+                g.resource_kind = new_kind.to_string();
+                g.tier = item.tier;
+                g.enchantment = item.enchantment;
+            }
+        }
+    }
+
+    /// Refreshes cached cluster/item/weapon metadata across already-recorded entities & logs
+    /// after the catalog finishes syncing or loading from cache.
+    pub fn refresh_catalog_bindings(&mut self) {
+        if !self.local_player.current_map_index.trim().is_empty() {
+            if let Some(c) = self.catalog.cluster(&self.local_player.current_map_index) {
+                if !c.name_fr.is_empty() {
+                    self.local_player.current_map_name_fr = c.name_fr.clone();
+                }
+            }
+        }
+
+        for run in self
+            .dungeons
+            .iter_mut()
+            .chain(self.live_session_dungeons.iter_mut())
+        {
+            if let Some(c) = self.catalog.cluster(&run.cluster_index) {
+                if !c.name_fr.is_empty()
+                    && (run.name_fr.starts_with("Zone ")
+                        || run.name_fr == run.cluster_index
+                        || run.name_fr == "Zone inconnue")
+                {
+                    run.name_fr = c.name_fr.clone();
+                    run.name_en = c.name_en.clone();
+                    run.kind = c.kind.clone();
+                    run.tier = c.tier;
+                }
+            }
+        }
+
+        for zone in self.live_session_zones.iter_mut().chain(
+            self.archived_sessions
+                .iter_mut()
+                .flat_map(|s| s.zones.iter_mut()),
+        ) {
+            if let Some(c) = self.catalog.cluster(&zone.cluster_index) {
+                if !c.name_fr.is_empty()
+                    && (zone.name_fr.starts_with("Zone ")
+                        || zone.name_fr == zone.cluster_index
+                        || zone.name_fr == "Zone inconnue")
+                {
+                    zone.name_fr = c.name_fr.clone();
+                    zone.name_en = c.name_en.clone();
+                    zone.kind = c.kind.clone();
+                    zone.tier = c.tier;
+                }
+            }
+        }
+
+        Self::refresh_gathering_list(
+            &self.catalog,
+            &mut self.gathering_log,
+            &mut self.gathering_totals,
+        );
+        Self::refresh_gathering_list(
+            &self.catalog,
+            &mut self.live_session_gathering_log,
+            &mut self.live_session_gathering_totals,
+        );
+
+        for l in self
+            .loot_log
+            .iter_mut()
+            .chain(self.live_session_loot_log.iter_mut())
+        {
+            if !l.is_silver {
+                if let Some(item) = self.catalog.item(l.item_index) {
+                    l.unique_name = item.unique_name.clone();
+                    l.name_fr = item.name_fr.clone();
+                    l.name_en = item.name_en.clone();
+                }
+            }
+        }
+
+        for ent in self
+            .entities
+            .values_mut()
+            .chain(self.live_session_combat.values_mut())
+        {
+            if ent.weapon_specificity < 4 {
+                let spell_keys: Vec<i32> = ent.spells.keys().copied().collect();
+                if let Some((weapon, spec)) =
+                    self.catalog.infer_best_weapon_from_spells(&spell_keys)
+                {
+                    if spec > ent.weapon_specificity {
+                        ent.equipment.main_hand = weapon.index;
+                        ent.weapon_specificity = spec;
+                    }
+                }
+            }
+        }
+    }
+
     /// Resets the current combat Damage/Heal/Taken meter while keeping saved snapshots.
     pub fn reset_meter(&mut self) {
         self.combat_start_ms = None;
@@ -1700,7 +2739,8 @@ impl AnalyzerEngine {
         }
     }
 
-    /// Resets live session counters (Fame, Silver, ReSpec, Might, Favor, Factions, Kills/Deaths).
+    /// Resets live session counters (Fame, Silver, ReSpec, Might, Favor, Factions, Kills/Deaths)
+    /// and live-session detail accumulators.
     pub fn reset_session_counters(&mut self, now_ms: u64) {
         self.session_start_ms = now_ms;
         self.last_now_ms = now_ms;
@@ -1730,6 +2770,13 @@ impl AnalyzerEngine {
         for val in self.faction_map.values_mut() {
             *val = (0.0, 0.0, 0.0);
         }
+        self.live_session_zones.clear();
+        self.live_session_combat.clear();
+        self.live_session_dungeons.clear();
+        self.live_session_gathering_totals = GatheringTotals::default();
+        self.live_session_gathering_log.clear();
+        self.live_session_loot_log.clear();
+        self.live_session_trades.clear();
     }
 
     /// Resets session counters and purges live instances, gathering log, and loot history.
@@ -1750,6 +2797,7 @@ impl AnalyzerEngine {
     /// Clears all recorded dungeon, mist, and corrupted runs.
     pub fn clear_dungeons(&mut self) {
         self.dungeons.clear();
+        self.live_session_dungeons.clear();
         self.opened_chests.clear();
         self.opened_caged_wisps.clear();
         self.dirty_history = true;
@@ -1759,12 +2807,15 @@ impl AnalyzerEngine {
     pub fn clear_gathering(&mut self) {
         self.gathering_totals = GatheringTotals::default();
         self.gathering_log.clear();
+        self.live_session_gathering_totals = GatheringTotals::default();
+        self.live_session_gathering_log.clear();
         self.dirty_history = true;
     }
 
     /// Clears the party loot history log.
     pub fn clear_loot(&mut self) {
         self.loot_log.clear();
+        self.live_session_loot_log.clear();
         self.dirty_history = true;
     }
 
@@ -1773,6 +2824,7 @@ impl AnalyzerEngine {
         self.market_orders.clear();
         self.mail_notifications.clear();
         self.trades.clear();
+        self.live_session_trades.clear();
     }
 
     /// Purges all session data, combat meter, snapshots, instances, and history.
@@ -1786,6 +2838,8 @@ impl AnalyzerEngine {
             self.local_player.object_id = 0;
             self.local_player.guild_name.clear();
             self.local_player.alliance_name.clear();
+            self.local_player_guid = Guid16::default();
+            self.awaiting_cluster_respawn = false;
         }
         self.dirty_history = true;
     }
@@ -1799,23 +2853,33 @@ impl AnalyzerEngine {
         let initial_snaps = self.snapshots.len();
         let initial_archived = self.archived_sessions.len();
 
-        self.dungeons.retain(|d| {
+        let retain_dungeon = |d: &DungeonRun| {
             d.cluster_index != "MISTS_DUO_T8"
                 && !d.name_fr.contains("Brumes Supérieures (Duo T8)")
                 && !d.name_fr.contains("Brumes Supérieures")
-        });
-        self.loot_log.retain(|l| {
+        };
+        let retain_loot = |l: &LootLogEntry| {
             l.looted_by != "Aurelia"
                 && l.looted_from != "Coffre des Brumes"
                 && !l.looted_by.contains("Aurelia")
-        });
-        self.gathering_log.retain(|g| {
+        };
+        let retain_gather = |g: &GatheringEntry| {
             !(g.item_index == 4011 || g.item_index == 4021)
                 && !(g.name_fr.contains("Chanvre fantôme") && g.tier == 8)
                 && !(g.name_fr.contains("Minerai de météorite") && g.tier == 7)
-        });
+        };
+
+        self.dungeons.retain(retain_dungeon);
+        self.live_session_dungeons.retain(retain_dungeon);
+        self.loot_log.retain(retain_loot);
+        self.live_session_loot_log.retain(retain_loot);
+        self.gathering_log.retain(retain_gather);
+        self.live_session_gathering_log.retain(retain_gather);
         if self.gathering_log.is_empty() {
             self.gathering_totals = GatheringTotals::default();
+        }
+        if self.live_session_gathering_log.is_empty() {
+            self.live_session_gathering_totals = GatheringTotals::default();
         }
         self.snapshots
             .retain(|s| s.label != "Boss Brumes" && !s.players.iter().any(|p| p.name == "Aurelia"));
@@ -1826,14 +2890,18 @@ impl AnalyzerEngine {
             self.local_player.object_id = 0;
             self.local_player.guild_name.clear();
             self.local_player.alliance_name.clear();
+            self.local_player_guid = Guid16::default();
+            self.awaiting_cluster_respawn = false;
         }
-        self.entities.retain(|_, ent| {
+        let is_real_ent = |ent: &InternalEntity| {
             ent.name != "Aurelia"
                 && ent.name != "Seraphina"
                 && ent.name != "Kaelen"
                 && ent.name != "Thorne"
                 && ent.name != "Vesper"
-        });
+        };
+        self.entities.retain(|_, ent| is_real_ent(ent));
+        self.live_session_combat.retain(|_, ent| is_real_ent(ent));
 
         if self.dungeons.len() != initial_dungeons
             || self.loot_log.len() != initial_loot
@@ -1924,10 +2992,19 @@ impl AnalyzerEngine {
             || self.session.favor > 0.0
             || self.session.kills > 0
             || self.session.deaths > 0
+            || self.live_session_gathering_totals.total_nodes > 0
+            || !self.live_session_combat.is_empty()
+            || !self.live_session_dungeons.is_empty()
+            || !self.live_session_loot_log.is_empty()
+            || !self.live_session_trades.is_empty()
+            || self
+                .faction_map
+                .values()
+                .any(|&(c, r, f)| c > 0.0 || r > 0.0 || f > 0.0)
     }
 
-    /// Archives the current live session summary into `archived_sessions` (persisted to disk)
-    /// and resets live session counters for the next session.
+    /// Archives the current live session (metrics, factions, zones, combats, dungeons, gathering, loot, trades)
+    /// into `archived_sessions` (persisted to disk) and resets live session accumulators for the next session.
     pub fn archive_session(
         &mut self,
         custom_label: Option<String>,
@@ -1945,6 +3022,18 @@ impl AnalyzerEngine {
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| self.local_player.current_map_name_fr.clone());
 
+        let factions = self.build_faction_summaries();
+        let zones = self.finalize_live_zones_snapshot(ended_at_ms);
+        let mut dungeons = self.live_session_dungeons.clone();
+        if let Some(active) = dungeons.first_mut().filter(|d| d.is_active) {
+            active.is_active = false;
+            let elapsed_s =
+                ((ended_at_ms.saturating_sub(active.started_at_ms)) as f64 / 1000.0).max(1.0);
+            active.duration_seconds = elapsed_s;
+            active.fame_per_hour = active.fame / (elapsed_s / 3600.0);
+        }
+        let (_, _, _, _, combat_players) = self.compute_live_session_combat_players();
+
         let archived = ArchivedSession {
             id,
             label,
@@ -1961,6 +3050,21 @@ impl AnalyzerEngine {
             favor: self.session.favor,
             kills: self.session.kills,
             deaths: self.session.deaths,
+            zone_fame: self.session.zone_fame,
+            satchel_fame: self.session.satchel_fame,
+            respec_paid_silver: self.session.respec_paid_silver,
+            guild_tax_paid: self.session.guild_tax_paid,
+            cluster_tax_paid: self.session.cluster_tax_paid,
+            repair_costs: self.session.repair_costs,
+            season_points: self.session.season_points,
+            factions,
+            zones,
+            combat_players,
+            dungeons,
+            gathering_totals: self.live_session_gathering_totals.clone(),
+            gathering_log: self.live_session_gathering_log.clone(),
+            loot_log: self.live_session_loot_log.clone(),
+            trades: self.live_session_trades.clone(),
         };
         self.archived_sessions.insert(0, archived.clone());
         if self.archived_sessions.len() > MAX_ARCHIVED_SESSIONS {
@@ -2003,6 +3107,11 @@ impl AnalyzerEngine {
         for d in &mut history.dungeons {
             d.is_active = false;
         }
+        for s in &mut history.archived_sessions {
+            for d in &mut s.dungeons {
+                d.is_active = false;
+            }
+        }
         self.snapshots = history.snapshots;
         self.archived_sessions = history.archived_sessions;
         self.dungeons = history.dungeons;
@@ -2031,17 +3140,68 @@ impl AnalyzerEngine {
         out
     }
 
+    fn build_faction_summaries(&self) -> Vec<FactionCitySummary> {
+        self.faction_map
+            .iter()
+            .map(|(city, &(coins, rank_pts, flag_pts))| FactionCitySummary {
+                city: city.label_fr().to_string(),
+                coins,
+                rank_points: rank_pts,
+                flag_points: flag_pts,
+            })
+            .collect()
+    }
+
+    fn finalize_live_zones_snapshot(&self, current_ms: u64) -> Vec<SessionZoneSummary> {
+        let mut zones = self.live_session_zones.clone();
+        if let Some(active) = zones.first_mut() {
+            if active.duration_seconds <= 0.0 {
+                active.duration_seconds =
+                    ((current_ms.saturating_sub(active.entered_at_ms)) as f64 / 1000.0).max(1.0);
+            }
+        }
+        zones
+    }
+
+    fn compute_live_session_combat_players(&self) -> (f64, i64, i64, i64, Vec<DamageMeterPlayer>) {
+        let min_s = self
+            .live_session_combat
+            .values()
+            .filter_map(|e| e.first_combat_ms)
+            .min();
+        let max_e = self
+            .live_session_combat
+            .values()
+            .filter_map(|e| e.last_combat_ms)
+            .max();
+        let fallback_secs = match (min_s, max_e) {
+            (Some(s), Some(e)) => ((e.saturating_sub(s) as f64) / 1000.0).max(1.0),
+            _ => 0.0,
+        };
+        self.compute_meter_players_from(self.live_session_combat.values(), fallback_secs)
+    }
+
     fn compute_meter_players(&self) -> (f64, i64, i64, i64, Vec<DamageMeterPlayer>) {
         let global_combat_secs = match (self.combat_start_ms, self.combat_end_ms) {
             (Some(s), Some(e)) => ((e.saturating_sub(s) as f64) / 1000.0).max(1.0),
             _ => 0.0,
         };
+        self.compute_meter_players_from(self.entities.values(), global_combat_secs)
+    }
 
+    fn compute_meter_players_from<'a, I>(
+        &self,
+        entities_iter: I,
+        global_combat_secs: f64,
+    ) -> (f64, i64, i64, i64, Vec<DamageMeterPlayer>)
+    where
+        I: Iterator<Item = &'a InternalEntity> + Clone,
+    {
         let mut total_damage = 0i64;
         let mut total_heal = 0i64;
         let mut total_taken = 0i64;
 
-        for ent in self.entities.values() {
+        for ent in entities_iter.clone() {
             if !ent.is_party && !ent.is_self {
                 continue;
             }
@@ -2051,7 +3211,7 @@ impl AnalyzerEngine {
         }
 
         let mut players = Vec::new();
-        for ent in self.entities.values() {
+        for ent in entities_iter {
             if (!ent.is_party && !ent.is_self)
                 || (ent.damage == 0
                     && ent.heal == 0
@@ -2189,16 +3349,7 @@ impl AnalyzerEngine {
             meter_players,
         ) = self.compute_meter_players();
 
-        let factions: Vec<FactionCitySummary> = self
-            .faction_map
-            .iter()
-            .map(|(city, &(coins, rank_pts, flag_pts))| FactionCitySummary {
-                city: city.label_fr().to_string(),
-                coins,
-                rank_points: rank_pts,
-                flag_points: flag_pts,
-            })
-            .collect();
+        let factions = self.build_faction_summaries();
 
         let session = SessionStats {
             elapsed_seconds: elapsed_s,
@@ -2231,6 +3382,16 @@ impl AnalyzerEngine {
             active.duration_seconds = d_secs;
             active.fame_per_hour = active.fame / (d_secs / 3600.0);
         }
+
+        let live_session_zones = self.finalize_live_zones_snapshot(current_ms);
+        let mut live_session_dungeons = self.live_session_dungeons.clone();
+        if let Some(active) = live_session_dungeons.first_mut().filter(|d| d.is_active) {
+            let d_secs =
+                ((current_ms.saturating_sub(active.started_at_ms)) as f64 / 1000.0).max(1.0);
+            active.duration_seconds = d_secs;
+            active.fame_per_hour = active.fame / (d_secs / 3600.0);
+        }
+        let (_, _, _, _, live_session_combat_players) = self.compute_live_session_combat_players();
 
         let mut inspected_players = Vec::new();
         for ent in self.entities.values() {
@@ -2268,6 +3429,17 @@ impl AnalyzerEngine {
                         enchantment: meta.enchantment,
                         item_value: est,
                     });
+                } else {
+                    slots.push(EquippedSlotView {
+                        slot: slot_name.into(),
+                        item_index: item_idx,
+                        unique_name: format!("ITEM_{item_idx}"),
+                        name_fr: format!("Objet #{item_idx}"),
+                        name_en: format!("Item #{item_idx}"),
+                        tier: 0,
+                        enchantment: 0,
+                        item_value: 0,
+                    });
                 }
             }
             inspected_players.push(InspectedPlayer {
@@ -2281,12 +3453,15 @@ impl AnalyzerEngine {
                 slots,
             });
         }
+        inspected_players.sort_by_key(|p| (!p.is_self, p.object_id));
 
         AppSnapshot {
             catalog_version: self.catalog.version.clone(),
             catalog_item_count: self.catalog.item_count(),
             catalog_spell_count: self.catalog.spell_count(),
             catalog_recipe_count: self.catalog.recipe_count(),
+            catalog_cluster_count: self.catalog.cluster_count(),
+            catalog_weapon_spell_count: self.catalog.weapon_spell_count(),
             local_player: self.local_player.clone(),
             combat_seconds,
             total_party_damage,
@@ -2304,6 +3479,13 @@ impl AnalyzerEngine {
             market_orders: self.market_orders.clone(),
             mail_notifications: self.mail_notifications.clone(),
             trades: self.trades.clone(),
+            live_session_zones,
+            live_session_combat_players,
+            live_session_dungeons,
+            live_session_gathering_totals: self.live_session_gathering_totals.clone(),
+            live_session_gathering_log: self.live_session_gathering_log.clone(),
+            live_session_loot_log: self.live_session_loot_log.clone(),
+            live_session_trades: self.live_session_trades.clone(),
             network: NetworkDiagnostics {
                 packets_processed: self.photon.packets_processed,
                 commands_processed: self.photon.commands_processed,
@@ -3382,5 +4564,463 @@ mod tests {
         assert_eq!(live.amount, 2);
         assert!((live.unit_price_silver - 445_000.0).abs() < 0.01);
         assert!((live.total_price_silver - 890_000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn handles_cluster_transition_guid_migration_and_avoids_duplication() {
+        let catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let mut engine = AnalyzerEngine::new(catalog, 1_000);
+        let my_guid = Guid16([0x42; 16]);
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::JoinResponse {
+                user_object_id: 101,
+                user_guid: my_guid,
+                username: "Zainados".into(),
+                map_index: "0200".into(),
+                main_map_index: "0200".into(),
+                guild_name: "Instinct".into(),
+                alliance_name: String::new(),
+                current_focus_points: 10_000.0,
+                max_focus_points: 30_000.0,
+                silver: FixPoint::from_f64(50_000.0),
+                gold: FixPoint::from_f64(0.0),
+                learning_points: FixPoint::from_f64(0.0),
+                reputation: 0.0,
+                is_respec_active: false,
+            },
+            1_100,
+        );
+        // Placeholder `"PA"` spawn name must never overwrite real `"Zainados"`
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::NewCharacter {
+                object_id: 101,
+                name: "PA".into(),
+                guid: my_guid,
+                guild_name: "Instinct".into(),
+                equipment: CharacterEquipment {
+                    main_hand: 1003,
+                    ..Default::default()
+                },
+            },
+            1_150,
+        );
+        assert_eq!(engine.snapshot(1_160).local_player.username, "Zainados");
+
+        // Cluster transition clears non-party transient state and awaits new object_id
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ChangeClusterResponse {
+                index: "0203".into(),
+                world_map_data_type: "SWAMP".into(),
+                island_name: String::new(),
+                mists_dungeon_tier: 0,
+            },
+            2_000,
+        );
+
+        // Equipment event can arrive slightly before NewCharacter on respawn
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::CharacterEquipmentChanged {
+                object_id: 456,
+                equipment: CharacterEquipment {
+                    off_hand: 1102,
+                    ..Default::default()
+                },
+                equipped_spells: vec![2104], // Infers 1003 (`T8_2H_DUALSWORD@2`)
+            },
+            2_050,
+        );
+
+        // NewCharacter spawns local player with new object_id=456, same GUID, and placeholder name `"PA"`
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::NewCharacter {
+                object_id: 456,
+                name: "PA".into(),
+                guid: my_guid,
+                guild_name: "Instinct".into(),
+                equipment: CharacterEquipment::default(),
+            },
+            2_100,
+        );
+
+        assert_eq!(engine.local_player.object_id, 456);
+        let snap1 = engine.snapshot(2_150);
+        assert_eq!(snap1.local_player.username, "Zainados");
+        assert_eq!(snap1.inspected_players.len(), 1);
+        assert_eq!(snap1.inspected_players[0].object_id, 456);
+        assert_eq!(snap1.inspected_players[0].name, "Zainados");
+        assert!(snap1.inspected_players[0]
+            .slots
+            .iter()
+            .any(|s| s.slot == "mainHand" && s.item_index == 1003));
+
+        // Post-zone HarvestFinished, UpdateFame, TakeSilver on new_id=456 all count normally
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::HarvestFinished {
+                user_object_id: 456,
+                harvest_object_id: 9001,
+                item_id: 4011,
+                standard_amount: 3,
+                collector_bonus_amount: 1,
+                premium_bonus_amount: 1,
+            },
+            2_200,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::UpdateFame {
+                object_id: 456,
+                total_player_fame: FixPoint::from_f64(100_000.0),
+                fame_with_zone_multiplier: FixPoint::from_f64(1_250.0),
+                zone_fame: FixPoint::from_f64(250.0),
+                is_premium_bonus: true,
+                satchel_fame: FixPoint::from_f64(0.0),
+                bonus_factor: 1.0,
+            },
+            2_250,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::TakeSilver {
+                object_id: 456,
+                target_entity_id: 9002,
+                yield_pre_tax: FixPoint::from_f64(800.0),
+                guild_tax: FixPoint::from_f64(80.0),
+                cluster_tax: FixPoint::from_f64(0.0),
+                is_premium_bonus: false,
+            },
+            2_300,
+        );
+
+        let snap2 = engine.snapshot(2_350);
+        assert_eq!(snap2.gathering_totals.ore, 5);
+        assert!((snap2.session.fame - 1_250.0).abs() < 0.01);
+        assert!((snap2.session.silver - 720.0).abs() < 0.01);
+        assert_eq!(snap2.live_session_zones[0].cluster_index, "0203");
+        assert_eq!(snap2.live_session_zones[0].gathering_resources, 5);
+
+        // Next zone change where UpdateMoney arrives before NewCharacter also migrates 456 -> 789
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ChangeClusterResponse {
+                index: "0205".into(),
+                world_map_data_type: "SWAMP".into(),
+                island_name: String::new(),
+                mists_dungeon_tier: 0,
+            },
+            3_000,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::UpdateMoney {
+                object_id: 789,
+                current_player_silver: FixPoint::from_f64(51_000.0),
+            },
+            3_100,
+        );
+        assert_eq!(engine.local_player.object_id, 789);
+        assert_eq!(engine.snapshot(3_120).inspected_players.len(), 1);
+    }
+
+    #[test]
+    fn upgrades_weapon_specificity_and_refreshes_catalog_bindings() {
+        let mut catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let mut engine = AnalyzerEngine::new(catalog.clone(), 1_000);
+        let my_guid = Guid16([0x55; 16]);
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::JoinResponse {
+                user_object_id: 10,
+                user_guid: my_guid,
+                username: "Fighter".into(),
+                map_index: "0203".into(),
+                main_map_index: "0203".into(),
+                guild_name: String::new(),
+                alliance_name: String::new(),
+                current_focus_points: 0.0,
+                max_focus_points: 30_000.0,
+                silver: FixPoint::from_f64(0.0),
+                gold: FixPoint::from_f64(0.0),
+                learning_points: FixPoint::from_f64(0.0),
+                reputation: 0.0,
+                is_respec_active: false,
+            },
+            1_050,
+        );
+        // Before world.json is merged, unknown cluster 0203 falls back to "Zone 0203"
+        assert_eq!(
+            engine.snapshot(1_060).local_player.current_map_name_fr,
+            "Zone 0203"
+        );
+
+        // Shared sword Q spell (2101) gives specificity 2 (not overriding with another generic spell)
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ActiveSpellEffectsUpdate {
+                causer_id: 10,
+                spell_indices: vec![2101],
+            },
+            1_100,
+        );
+        // Signature Dual Swords E spell (2104, specificity 3) upgrades main_hand to 1003 (`T8_2H_DUALSWORD@2`)
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ActiveSpellEffectsUpdate {
+                causer_id: 10,
+                spell_indices: vec![2104],
+            },
+            1_150,
+        );
+        // Subsequent shared Q spell (2101, specificity 2) does not downgrade the weapon
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ActiveSpellEffectsUpdate {
+                causer_id: 10,
+                spell_indices: vec![2101],
+            },
+            1_200,
+        );
+        let snap = engine.snapshot(1_250);
+        assert_eq!(
+            snap.inspected_players[0]
+                .slots
+                .iter()
+                .find(|s| s.slot == "mainHand")
+                .map(|s| s.item_index),
+            Some(1003)
+        );
+
+        // Uncatalogued resource (item 8888) falls back to ITEM_8888 before catalog import
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::HarvestFinished {
+                user_object_id: 10,
+                harvest_object_id: 7777,
+                item_id: 8888,
+                standard_amount: 2,
+                collector_bonus_amount: 0,
+                premium_bonus_amount: 0,
+            },
+            1_300,
+        );
+        assert_eq!(
+            engine.snapshot(1_320).gathering_log[0].unique_name,
+            "ITEM_8888"
+        );
+
+        // Now simulate catalog enrichment via ao-bin-dumps + refresh_catalog_bindings()
+        catalog
+            .merge_ao_bin_dumps_world(r#"[{"Index":"0203","UniqueName":"Willowsigh Marsh"}]"#)
+            .unwrap();
+        catalog
+            .merge_ao_bin_dumps_items(
+                r#"[{"Index":"8888","UniqueName":"T5_WOOD","LocalizedNames":{"FR-FR":"Bûches de pin","EN-US":"Pine Logs"}}]"#,
+            )
+            .unwrap();
+        engine.catalog = catalog;
+        engine.refresh_catalog_bindings();
+
+        let healed = engine.snapshot(1_400);
+        assert_eq!(healed.local_player.current_map_name_fr, "Willowsigh Marsh");
+        assert_eq!(healed.live_session_zones[0].name_fr, "Willowsigh Marsh");
+        assert_eq!(healed.gathering_log[0].unique_name, "T5_WOOD");
+        assert_eq!(healed.gathering_log[0].name_fr, "Bûches de pin");
+        assert_eq!(healed.gathering_log[0].resource_kind, "wood");
+        assert_eq!(healed.gathering_totals.wood, 2);
+    }
+
+    #[test]
+    fn records_scaled_silver_loot_without_ground_item_collision() {
+        let catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let mut engine = AnalyzerEngine::new(catalog, 1_000);
+
+        // Discovered item shares object_id=500 with a later Silver pickup
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::NewDiscoveredItem {
+                object_id: 500,
+                item_id: 1003,
+                quantity: 1,
+                estimated_market_value: 250_000,
+                quality_level: 2,
+            },
+            1_100,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::OtherGrabbedLoot {
+                object_id: 500,
+                looted_from_name: "@MOB".into(),
+                looted_by_name: "Zainados".into(),
+                is_silver: true,
+                item_index: 0,
+                quantity: 325,
+            },
+            1_200,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::OtherGrabbedLoot {
+                object_id: 501,
+                looted_from_name: "@MOB".into(),
+                looted_by_name: "Zainados".into(),
+                is_silver: true,
+                item_index: 0,
+                quantity: 358,
+            },
+            1_300,
+        );
+        // An actual item with colliding quantity=325 and index=0 -> resolves to discovered_items[500] (1003) and is NOT deduped against Silver!
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::OtherGrabbedLoot {
+                object_id: 500,
+                looted_from_name: "@MOB".into(),
+                looted_by_name: "Zainados".into(),
+                is_silver: false,
+                item_index: 0,
+                quantity: 325,
+            },
+            1_400,
+        );
+
+        let snap = engine.snapshot(1_500);
+        assert_eq!(snap.loot_log.len(), 3);
+        assert_eq!(snap.loot_log[0].item_index, 1003);
+        assert!(!snap.loot_log[0].is_silver);
+        assert_eq!(snap.loot_log[1].unique_name, "SILVER");
+        assert_eq!(snap.loot_log[1].quantity, 358);
+        assert!(snap.loot_log[1].is_silver);
+        assert_eq!(snap.loot_log[2].unique_name, "SILVER");
+        assert_eq!(snap.loot_log[2].quantity, 325);
+        assert!(snap.loot_log[2].is_silver);
+    }
+
+    #[test]
+    fn archives_rich_session_details_and_deserializes_legacy_archives() {
+        let catalog = Catalog::from_json_str(EMBEDDED).unwrap();
+        let mut engine = AnalyzerEngine::new(catalog, 1_000);
+        let my_guid = Guid16([0x77; 16]);
+
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::JoinResponse {
+                user_object_id: 10,
+                user_guid: my_guid,
+                username: "Explorer".into(),
+                map_index: "0200".into(),
+                main_map_index: "0200".into(),
+                guild_name: "Instinct".into(),
+                alliance_name: String::new(),
+                current_focus_points: 5_000.0,
+                max_focus_points: 30_000.0,
+                silver: FixPoint::from_f64(10_000.0),
+                gold: FixPoint::from_f64(0.0),
+                learning_points: FixPoint::from_f64(0.0),
+                reputation: 0.0,
+                is_respec_active: false,
+            },
+            1_100,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::ChangeClusterResponse {
+                index: "@MISTS@500".into(),
+                world_map_data_type: "T7_MISTS_DEFAULT".into(),
+                island_name: String::new(),
+                mists_dungeon_tier: 7,
+            },
+            2_000,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::HealthUpdate(HealthTick {
+                affected_object_id: 9000,
+                timestamp: 2_500,
+                health_change: -1_200.0,
+                new_health_value: 800.0,
+                effect_type: EffectType::Physical,
+                effect_origin: EffectOrigin::Direct,
+                causer_id: 10,
+                causing_spell_index: 2104,
+            }),
+            2_500,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::HarvestFinished {
+                user_object_id: 10,
+                harvest_object_id: 9001,
+                item_id: 4011,
+                standard_amount: 4,
+                collector_bonus_amount: 1,
+                premium_bonus_amount: 1,
+            },
+            2_600,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::OtherGrabbedLoot {
+                object_id: 9002,
+                looted_from_name: "Boss".into(),
+                looted_by_name: "Explorer".into(),
+                is_silver: true,
+                item_index: 0,
+                quantity: 450,
+            },
+            2_700,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::UpdateCurrency {
+                city_faction: CityFaction::Thetford,
+                gained_faction_coins: FixPoint::from_f64(150.0),
+                faction_rank_points: FixPoint::from_f64(25.0),
+                premium_bonus: FixPoint::from_f64(0.0),
+                total_player_faction_points: FixPoint::from_f64(1_000.0),
+            },
+            2_800,
+        );
+        engine.ingest_telemetry_event(
+            AlbionTelemetryEvent::TradeFinished {
+                player1_silver: FixPoint::from_f64(5_000.0),
+                player2_silver: FixPoint::from_f64(0.0),
+                sales_tax: FixPoint::from_f64(125.0),
+                item_count: 2,
+            },
+            2_900,
+        );
+
+        let snap = engine.snapshot(3_000);
+        assert_eq!(snap.live_session_zones.len(), 2);
+        assert_eq!(snap.live_session_combat_players.len(), 1);
+        assert_eq!(snap.live_session_dungeons.len(), 1);
+        assert_eq!(snap.live_session_gathering_totals.ore, 6);
+        assert_eq!(snap.live_session_loot_log.len(), 1);
+        assert_eq!(snap.live_session_trades.len(), 1);
+
+        let archived = engine
+            .archive_session(Some("Session Brumes".into()), 4_000)
+            .expect("session should archive");
+        assert_eq!(archived.label, "Session Brumes");
+        assert_eq!(archived.zones.len(), 2);
+        assert_eq!(archived.combat_players.len(), 1);
+        assert_eq!(archived.combat_players[0].spells.len(), 1);
+        assert_eq!(archived.dungeons.len(), 1);
+        assert!(!archived.dungeons[0].is_active);
+        assert_eq!(archived.gathering_totals.ore, 6);
+        assert_eq!(archived.gathering_log.len(), 1);
+        assert_eq!(archived.loot_log.len(), 1);
+        assert_eq!(archived.trades.len(), 1);
+        assert!(archived
+            .factions
+            .iter()
+            .any(|f| f.city == "Thetford" && (f.coins - 150.0).abs() < 0.01));
+
+        // Legacy archive JSON (missing extended detail fields) must deserialize cleanly
+        let legacy_json = r#"{
+            "id":"sess-legacy",
+            "label":"Ancienne session",
+            "startedAtMs":1000,
+            "endedAtMs":2000,
+            "durationSeconds":600.0,
+            "mapNameFr":"Thetford",
+            "fame":12000.0,
+            "famePerHour":72000.0,
+            "silver":5000.0,
+            "silverPerHour":30000.0,
+            "respecPoints":100.0,
+            "might":0.0,
+            "favor":0.0,
+            "kills":1,
+            "deaths":0
+        }"#;
+        let legacy: ArchivedSession = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(legacy.label, "Ancienne session");
+        assert!(legacy.zones.is_empty());
+        assert!(legacy.combat_players.is_empty());
+        assert!(legacy.gathering_log.is_empty());
     }
 }

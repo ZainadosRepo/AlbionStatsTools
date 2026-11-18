@@ -62,23 +62,6 @@ fn get_state(app: AppHandle, state: tauri::State<AppState>) -> Result<FullStatus
 }
 
 #[tauri::command]
-fn simulate_session(
-    app: AppHandle,
-    state: tauri::State<AppState>,
-) -> Result<FullStatusResponse, String> {
-    let now = now_unix_ms();
-    {
-        let mut eng = state
-            .engine
-            .lock()
-            .map_err(|_| "verrou moteur indisponible".to_string())?;
-        eng.clear_all_history(now);
-        persist_history_best_effort(&app, &eng);
-    }
-    get_state(app, state)
-}
-
-#[tauri::command]
 fn reset_meter(
     app: AppHandle,
     state: tauri::State<AppState>,
@@ -330,21 +313,21 @@ fn import_ao_bin_dumps(
     let mut added = eng.catalog.merge_ao_bin_dumps_items(&json_text)?;
     if let Some(w_json) = world_json {
         if !w_json.trim().is_empty() {
-            added += eng.catalog.merge_ao_bin_dumps_world(&w_json).unwrap_or(0);
+            added += eng.catalog.merge_ao_bin_dumps_world(&w_json)?;
         }
     }
     if let Some(s_xml) = spells_xml {
         if !s_xml.trim().is_empty() {
-            let res = eng.catalog.merge_ao_bin_dumps_spells_xml(&s_xml);
-            added += res.unwrap_or(0);
+            added += eng.catalog.merge_ao_bin_dumps_spells_xml(&s_xml)?;
         }
     }
     if let Some(i_xml) = items_xml {
         if !i_xml.trim().is_empty() {
-            let res = eng.catalog.merge_ao_bin_dumps_items_xml(&i_xml);
-            added += res.unwrap_or(0);
+            added += eng.catalog.merge_ao_bin_dumps_items_xml(&i_xml)?;
         }
     }
+    let _ = eng.catalog.load_compact_recipes_json(RECIPES_JSON, false);
+    eng.refresh_catalog_bindings();
     if let Ok(path) = catalog_cache_path(&app) {
         if let Ok(raw_val) = serde_json::to_value(eng.catalog.export_raw()) {
             let _ = settings::save(&path, &raw_val);
@@ -433,9 +416,11 @@ pub fn run() {
                     if let Ok(text) = std::fs::read_to_string(&cat_path) {
                         if let Ok(mut cached_cat) = Catalog::from_json_str(&text) {
                             let _ = cached_cat.load_compact_recipes_json(RECIPES_JSON, false);
+                            cached_cat.merge_missing_defaults(&eng.catalog);
                             if cached_cat.item_count() >= eng.catalog.item_count()
                                 || cached_cat.spell_count() > eng.catalog.spell_count()
                                 || cached_cat.recipe_count() > eng.catalog.recipe_count()
+                                || cached_cat.cluster_count() > eng.catalog.cluster_count()
                             {
                                 eng.catalog = cached_cat;
                             }
@@ -458,12 +443,14 @@ pub fn run() {
                         } else if let Ok(hist) = serde_json::from_str(&text) {
                             eng.restore_history(hist);
                             eng.purge_mock_data();
+                            eng.refresh_catalog_bindings();
                             if eng.take_dirty_history() {
                                 persist_history_best_effort(handle, &eng);
                             }
                         }
                     }
                 }
+                eng.refresh_catalog_bindings();
                 if let Ok(set_path) = settings_path(handle) {
                     if let Ok(text) = std::fs::read_to_string(&set_path) {
                         if text.contains("T8_MAIN_NATURESTAFF_KEEPER@1")
@@ -498,7 +485,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
-            simulate_session,
             reset_meter,
             reset_session,
             clear_dungeons,

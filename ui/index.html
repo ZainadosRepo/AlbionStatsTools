@@ -413,64 +413,92 @@
             </div>
           </div>
 
-          <div class="kpi-strip">
-            <article class="kpi-cell kpi-fame">
-              <span class="kpi-label">Renommée (Fame)</span>
-              <strong id="kpi-fame" class="kpi-value">0</strong>
-              <span id="kpi-fame-hr" class="kpi-sub">0 / heure</span>
-              <span id="kpi-fame-extra" class="kpi-foot">Zone : 0 • Sacoche : 0</span>
-            </article>
-
-            <article class="kpi-cell kpi-silver">
-              <span class="kpi-label">Silver (Net)</span>
-              <strong id="kpi-silver" class="kpi-value">0 Silver</strong>
-              <span id="kpi-silver-hr" class="kpi-sub">0 Silver / h</span>
-              <span id="kpi-silver-tax" class="kpi-foot">Taxe guilde : 0 • Réparations : 0</span>
-            </article>
-
-            <article class="kpi-cell kpi-respec">
-              <span class="kpi-label">Points de ReSpec</span>
-              <strong id="kpi-respec" class="kpi-value">0</strong>
-              <span id="kpi-respec-hr" class="kpi-sub">0 / heure</span>
-              <span id="kpi-respec-cost" class="kpi-foot">Silver payé : 0 Silver</span>
-            </article>
-
-            <article class="kpi-cell kpi-might">
-              <span class="kpi-label">Puissance &amp; Faveur</span>
-              <strong id="kpi-might" class="kpi-value">0 Might</strong>
-              <span id="kpi-favor" class="kpi-sub">0 Faveur</span>
-              <span id="kpi-might-hr" class="kpi-foot">0 Might/h • 0 Faveur/h</span>
-            </article>
-
-            <article class="kpi-cell kpi-pvp">
-              <span class="kpi-label">Bilan Combat &amp; Saison</span>
-              <strong id="kpi-kd" class="kpi-value">0 K / 0 D</strong>
-              <span id="kpi-focus" class="kpi-sub">Focus : 0 / 30 000</span>
-              <span id="kpi-season" class="kpi-foot">Points GvG : 0 • LP : 0</span>
-            </article>
-          </div>
-
-          <div class="combat-grid">
-            <div class="panel">
+          <div class="session-layout">
+            <aside class="panel session-sidebar-panel">
               <div class="panel-header">
                 <div class="panel-heading-group">
-                  <h2>Sessions Enregistrées</h2>
-                  <span class="sub-label">Sauvegarde auto à la fermeture &amp; dans session_history.json</span>
+                  <h2>Sessions</h2>
+                  <span class="sub-label">En direct &amp; session_history.json</span>
                 </div>
-                <span id="archived-session-badge" class="badge-subtle">0 session</span>
+                <span id="archived-session-badge" class="badge-subtle">0 archivée</span>
               </div>
-              <div id="archived-session-rows" class="table-wrap"></div>
-            </div>
+              <div id="session-list-rows" class="session-list"></div>
+            </aside>
 
-            <div class="panel">
-              <div class="panel-header">
-                <div class="panel-heading-group">
-                  <h2>Guerre de Factions</h2>
-                  <span class="sub-label">Jetons gagnés, points de rang et points de drapeau</span>
-                </div>
-                <span class="badge-subtle">Cités royales</span>
+            <div class="session-inspector-col">
+              <div id="session-inspector-header" class="session-inspector-banner"></div>
+              <div id="session-legacy-note" class="session-legacy-note" hidden>
+                Archive issue d'une version antérieure : seuls les totaux globaux étaient enregistrés. Les nouvelles sessions enregistrent aussi les zones, combats, récoltes, donjons et butins.
               </div>
-              <div id="faction-rows" class="table-wrap"></div>
+
+              <div class="kpi-strip">
+                <article class="kpi-cell kpi-fame">
+                  <span class="kpi-label">Renommée (Fame)</span>
+                  <strong id="kpi-fame" class="kpi-value">0</strong>
+                  <span id="kpi-fame-hr" class="kpi-sub">0 / heure</span>
+                  <span id="kpi-fame-extra" class="kpi-foot">Zone : 0 • Sacoche : 0</span>
+                </article>
+
+                <article class="kpi-cell kpi-silver">
+                  <span class="kpi-label">Silver (Net)</span>
+                  <strong id="kpi-silver" class="kpi-value">0 Silver</strong>
+                  <span id="kpi-silver-hr" class="kpi-sub">0 Silver / h</span>
+                  <span id="kpi-silver-tax" class="kpi-foot">Taxe guilde : 0 • Réparations : 0</span>
+                </article>
+
+                <article class="kpi-cell kpi-respec">
+                  <span class="kpi-label">Points de ReSpec</span>
+                  <strong id="kpi-respec" class="kpi-value">0</strong>
+                  <span id="kpi-respec-hr" class="kpi-sub">0 / heure</span>
+                  <span id="kpi-respec-cost" class="kpi-foot">Silver payé : 0 Silver</span>
+                </article>
+
+                <article class="kpi-cell kpi-might">
+                  <span class="kpi-label">Puissance &amp; Faveur</span>
+                  <strong id="kpi-might" class="kpi-value">0 Might</strong>
+                  <span id="kpi-favor" class="kpi-sub">0 Faveur</span>
+                  <span id="kpi-might-hr" class="kpi-foot">0 Might/h • 0 Faveur/h</span>
+                </article>
+
+                <article class="kpi-cell kpi-pvp">
+                  <span class="kpi-label">Bilan &amp; Activité</span>
+                  <strong id="kpi-kd" class="kpi-value">0 K / 0 D</strong>
+                  <span id="kpi-focus" class="kpi-sub">Focus : 0 / 30 000</span>
+                  <span id="kpi-season" class="kpi-foot">Points GvG : 0 • LP : 0</span>
+                </article>
+              </div>
+
+              <div id="session-subtabs" class="segmented session-subtabs" role="tablist" aria-label="Détails de la session">
+                <button class="seg-btn active" data-session-subtab="all" type="button">
+                  <span>Vue globale</span>
+                </button>
+                <button class="seg-btn" data-session-subtab="zones" type="button">
+                  <span>Zones</span>
+                  <span id="subtab-count-zones" class="subtab-count">0</span>
+                </button>
+                <button class="seg-btn" data-session-subtab="gathering" type="button">
+                  <span>Récolte</span>
+                  <span id="subtab-count-gathering" class="subtab-count">0</span>
+                </button>
+                <button class="seg-btn" data-session-subtab="combat" type="button">
+                  <span>Combats</span>
+                  <span id="subtab-count-combat" class="subtab-count">0</span>
+                </button>
+                <button class="seg-btn" data-session-subtab="dungeons" type="button">
+                  <span>Donjons</span>
+                  <span id="subtab-count-dungeons" class="subtab-count">0</span>
+                </button>
+                <button class="seg-btn" data-session-subtab="loot" type="button">
+                  <span>Butin &amp; Échanges</span>
+                  <span id="subtab-count-loot" class="subtab-count">0</span>
+                </button>
+                <button class="seg-btn" data-session-subtab="factions" type="button">
+                  <span>Factions</span>
+                  <span id="subtab-count-factions" class="subtab-count">0</span>
+                </button>
+              </div>
+
+              <div id="session-inspector-body" class="session-section-stack"></div>
             </div>
           </div>
         </section>
